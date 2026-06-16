@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 from uuid import uuid4
 
 from app.main import app
+from common.config import settings
 
 
 client = TestClient(app)
@@ -212,3 +213,43 @@ def test_emergency_flow_trace_routes_from_safety_to_result_without_follow_up():
     assert "follow_up_agent" not in session_data["node_trace"]
     assert any(item["agent"] == "safety_agent" for item in session_data["agent_trace"])
     assert "emergency" in session_data["route_reason"].lower()
+
+
+def test_triage_analyze_injects_llm_client_when_enabled(monkeypatch):
+    from app.routers import triage as triage_router
+
+    captured = {}
+
+    async def fake_run_triage(request, llm_client=None):
+        captured["llm_client"] = llm_client
+        return {
+            "session_id": request.session_id,
+            "status": "needs_follow_up",
+            "risk_level": "low",
+            "question": "请补充症状部位",
+            "known_facts_summary": "信息不足",
+            "missing_fields": ["location"],
+        }
+
+    sentinel_client = object()
+    monkeypatch.setattr(triage_router, "run_triage", fake_run_triage)
+    monkeypatch.setattr(triage_router, "get_triage_llm_client", lambda: sentinel_client, raising=False)
+    settings.ENABLE_LLM_TRIAGE = True
+
+    response = client.post(
+        "/api/triage/analyze",
+        json={
+            "session_id": f"llm-session-{uuid4()}",
+            "patient": {
+                "age": 32,
+                "sex": "female",
+                "medical_history": [],
+                "allergies": [],
+                "medications": [],
+            },
+            "symptom_text": "喉咙不舒服",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["llm_client"] is sentinel_client

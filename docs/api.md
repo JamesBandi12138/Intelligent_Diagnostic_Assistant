@@ -230,6 +230,7 @@ LLM 润色与回退相关的调试字段也会在 `GET /api/triage/sessions/{ses
 - `raw_follow_up_question` / `raw_report_summary` 是规则层生成的原始文本。
 - `llm_follow_up_question` / `llm_report_summary` 是 LLM 润色后的最终文本。
 - `llm_used=false` 表示本轮回落到了规则结果，`llm_error` 用于区分 `transport_error`、`format_error` 或 `safety_reject`。
+- `transport_error` 不只包含网络超时，也包含模型供应商返回的鉴权、额度不足、欠费或访问被拒绝等运行时错误。
 - `llm_trace` 用于查看每个 agent 的 LLM 调用参与情况。
 
 ## `POST /api/reports`

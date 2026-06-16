@@ -225,7 +225,19 @@ def _recommend_department(symptom_text: str) -> DepartmentRecommendation:
 
 def _classify_llm_error(error: Exception) -> str:
     message = str(error).lower()
-    if any(token in message for token in ("timeout", "network", "auth", "unavailable")):
+    if any(
+        token in message
+        for token in (
+            "timeout",
+            "network",
+            "auth",
+            "unavailable",
+            "access denied",
+            "arrearage",
+            "quota",
+            "insufficient",
+        )
+    ):
         return "transport_error"
     return "format_error"
 
@@ -254,7 +266,12 @@ async def _call_llm_json(llm_client, prompt: str, max_tokens: int = 240) -> dict
             {"role": "user", "content": prompt},
         ],
     )
-    return json.loads(response.choices[0].message.content)
+    content = response.choices[0].message.content.strip()
+    if content.startswith("```"):
+        lines = content.splitlines()
+        if len(lines) >= 3:
+            content = "\n".join(lines[1:-1]).strip()
+    return json.loads(content)
 
 
 async def _rewrite_follow_up_question_with_llm(

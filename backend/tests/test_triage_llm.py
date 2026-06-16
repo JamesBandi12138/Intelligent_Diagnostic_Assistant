@@ -57,6 +57,60 @@ def test_follow_up_agent_prefers_llm_rewritten_question_and_records_trace():
     assert session.to_payload()["llm_trace"][0]["task"] == "rewrite_follow_up_question"
 
 
+def test_follow_up_agent_accepts_markdown_wrapped_json_from_llm():
+    session_id = f"llm-follow-up-markdown-{uuid4()}"
+    request = TriageRequest(
+        session_id=session_id,
+        patient=PatientProfile(age=29, sex="female"),
+        symptom_text="throat discomfort",
+        city="涓婃捣",
+    )
+
+    response = asyncio.run(
+        run_triage(
+            request,
+            llm_client=_FakeClient(
+                    [
+                    '```json\n{"question":"鍠夊挋涓嶈垝鏈嶅ぇ姒傛寔缁涔呬簡锛屾槸绐佺劧寮€濮嬭繕鏄參鎱㈠姞閲嶇殑锛?"}\n```'
+                ]
+            ),
+        )
+    )
+
+    session = get_session(session_id)
+
+    assert response.status == "needs_follow_up"
+    assert session is not None
+    assert session.to_payload()["llm_used"] is True
+    assert session.to_payload()["llm_error"] is None
+    assert session.to_payload()["llm_follow_up_question"] == response.question
+
+
+def test_follow_up_agent_maps_provider_access_denied_to_transport_error():
+    class _QuotaDeniedCompletions:
+        async def create(self, **kwargs):
+            raise RuntimeError("Access denied, account Arrearage, insufficient quota")
+
+    class _QuotaDeniedClient:
+        chat = type("Chat", (), {"completions": _QuotaDeniedCompletions()})()
+
+    session_id = f"llm-follow-up-quota-{uuid4()}"
+    request = TriageRequest(
+        session_id=session_id,
+        patient=PatientProfile(age=29, sex="female"),
+        symptom_text="throat discomfort",
+        city="上海",
+    )
+
+    response = asyncio.run(run_triage(request, llm_client=_QuotaDeniedClient()))
+    session = get_session(session_id)
+
+    assert response.status == "needs_follow_up"
+    assert session is not None
+    assert session.to_payload()["llm_used"] is False
+    assert session.to_payload()["llm_error"] == "transport_error"
+
+
 def test_follow_up_agent_falls_back_to_rule_question_when_llm_fails():
     class _FailingCompletions:
         async def create(self, **kwargs):

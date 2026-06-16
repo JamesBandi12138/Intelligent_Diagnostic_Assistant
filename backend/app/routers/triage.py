@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.schemas.triage import AnalyzeResponse, TriageRequest, TriageSessionDetailResponse, TriageSessionResponse
+from services.llm.factory import get_triage_llm_client
 from services.session_store import create_session as create_session_record, get_session
 from services.triage_graph.graph import run_triage
 
@@ -25,7 +26,7 @@ async def create_session() -> TriageSessionResponse:
     summary="提交症状或追问回答并推进导诊流程",
 )
 async def analyze_triage(request: TriageRequest):
-    return await run_triage(request)
+    return await run_triage(request, llm_client=get_triage_llm_client())
 
 
 @router.get(

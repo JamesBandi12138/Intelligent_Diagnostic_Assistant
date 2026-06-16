@@ -181,6 +181,10 @@ def test_session_detail_exposes_langgraph_debug_trace_for_follow_up_flow():
     assert any(item["agent"] == "knowledge_agent" for item in session_data["agent_trace"])
     assert session_data["route_reason"]
     assert "knowledge_summary" in session_data
+    assert "llm_enabled" in session_data
+    assert "llm_provider" in session_data
+    assert "llm_model" in session_data
+    assert "llm_base_url" in session_data
 
 
 def test_emergency_flow_trace_routes_from_safety_to_result_without_follow_up():

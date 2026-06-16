@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.schemas.triage import AnalyzeResponse, TriageRequest, TriageSessionDetailResponse, TriageSessionResponse
+from common.config import settings
 from services.llm.factory import get_triage_llm_client
 from services.session_store import create_session as create_session_record, get_session
 from services.triage_graph.graph import run_triage
@@ -55,6 +56,10 @@ async def get_session_detail(session_id: str) -> TriageSessionDetailResponse:
         llm_follow_up_question=session.llm_follow_up_question,
         raw_report_summary=session.raw_report_summary,
         llm_report_summary=session.llm_report_summary,
+        llm_enabled=settings.ENABLE_LLM_TRIAGE,
+        llm_provider=settings.LLM_PROVIDER,
+        llm_model=settings.LLM_MODEL,
+        llm_base_url=settings.LLM_BASE_URL,
         llm_used=session.llm_used,
         llm_error=session.llm_error,
         llm_trace=session.llm_trace,

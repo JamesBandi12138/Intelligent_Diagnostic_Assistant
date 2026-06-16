@@ -94,6 +94,10 @@ export interface TriageSessionDetailResponse {
   llm_follow_up_question?: string | null;
   raw_report_summary?: string | null;
   llm_report_summary?: string | null;
+  llm_enabled?: boolean;
+  llm_provider?: string | null;
+  llm_model?: string | null;
+  llm_base_url?: string | null;
   llm_used?: boolean;
   llm_error?: string | null;
   llm_trace?: LlmTraceEntry[];

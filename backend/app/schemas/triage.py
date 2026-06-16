@@ -123,6 +123,10 @@ class TriageSessionDetailResponse(BaseModel):
     llm_follow_up_question: str | None = None
     raw_report_summary: str | None = None
     llm_report_summary: str | None = None
+    llm_enabled: bool = False
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    llm_base_url: str | None = None
     llm_used: bool = False
     llm_error: str | None = None
     llm_trace: list[LlmTraceEntry] = Field(default_factory=list)

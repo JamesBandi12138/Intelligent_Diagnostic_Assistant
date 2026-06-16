@@ -107,6 +107,42 @@
               </li>
             </ul>
           </section>
+          <section v-if="showLlmDiagnostics" class="result-card llm-diagnostic-card">
+            <h3>LLM 运行状态 / 配置诊断</h3>
+            <div class="llm-diagnostic-grid">
+              <div>
+                <p><strong>status:</strong> {{ llmStatusLabel }}</p>
+                <p><strong>enabled:</strong> {{ llmEnabled }}</p>
+                <p v-if="llmProvider"><strong>provider:</strong> {{ llmProvider }}</p>
+                <p v-if="llmModel"><strong>model:</strong> {{ llmModel }}</p>
+                <p v-if="llmBaseUrl"><strong>base_url:</strong> {{ llmBaseUrl }}</p>
+                <p v-if="currentAgent"><strong>current_agent:</strong> {{ currentAgent }}</p>
+              </div>
+              <div>
+                <p v-if="llmUsed !== null"><strong>llm_used:</strong> {{ llmUsed }}</p>
+                <p><strong>fallback:</strong> {{ llmFallback }}</p>
+                <p v-if="llmError"><strong>error_code:</strong> {{ llmError }}</p>
+                <p v-if="llmErrorLabel"><strong>error_meaning:</strong> {{ llmErrorLabel }}</p>
+                <p v-if="lastLlmTraceEntry"><strong>last_agent:</strong> {{ lastLlmTraceEntry.agent }}</p>
+                <p v-if="lastLlmTraceEntry"><strong>last_task:</strong> {{ lastLlmTraceEntry.task }}</p>
+              </div>
+            </div>
+            <div class="llm-diagnostic-grid">
+              <div v-if="rawFollowUpQuestion || llmFollowUpQuestion">
+                <p v-if="rawFollowUpQuestion"><strong>follow_up_raw:</strong> {{ rawFollowUpQuestion }}</p>
+                <p v-if="llmFollowUpQuestion"><strong>follow_up_llm:</strong> {{ llmFollowUpQuestion }}</p>
+              </div>
+              <div v-if="rawReportSummary || llmReportSummary">
+                <p v-if="rawReportSummary"><strong>summary_raw:</strong> {{ rawReportSummary }}</p>
+                <p v-if="llmReportSummary"><strong>summary_llm:</strong> {{ llmReportSummary }}</p>
+              </div>
+            </div>
+            <ul v-if="llmTrace.length" class="debug-list">
+              <li v-for="(item, index) in llmTrace" :key="`${item.agent}-${item.task}-diagnostic-${index}`">
+                {{ item.agent }} | {{ item.task }} | used={{ item.used }} | fallback={{ item.fallback }}<span v-if="item.error"> | error={{ item.error }}</span>
+              </li>
+            </ul>
+          </section>
         </article>
 
         <article class="panel conversation-panel">
@@ -362,6 +398,10 @@ const rawFollowUpQuestion = ref('');
 const llmFollowUpQuestion = ref('');
 const rawReportSummary = ref('');
 const llmReportSummary = ref('');
+const llmEnabled = ref(false);
+const llmProvider = ref('');
+const llmModel = ref('');
+const llmBaseUrl = ref('');
 const llmUsed = ref<boolean | null>(null);
 const llmError = ref('');
 const llmTrace = ref<LlmTraceEntry[]>([]);
@@ -390,6 +430,49 @@ const showDebugPanel = computed(
     Boolean(llmReportSummary.value) ||
     llmTrace.value.length > 0,
 );
+const showLlmDiagnostics = computed(
+  () =>
+    llmEnabled.value ||
+    Boolean(llmProvider.value) ||
+    Boolean(llmModel.value) ||
+    Boolean(llmBaseUrl.value) ||
+    llmUsed.value !== null ||
+    Boolean(llmError.value) ||
+    llmTrace.value.length > 0 ||
+    Boolean(rawFollowUpQuestion.value) ||
+    Boolean(llmFollowUpQuestion.value) ||
+    Boolean(rawReportSummary.value) ||
+    Boolean(llmReportSummary.value),
+);
+const lastLlmTraceEntry = computed(() => llmTrace.value[llmTrace.value.length - 1] || null);
+const llmFallback = computed(() => Boolean(lastLlmTraceEntry.value?.fallback));
+const llmStatusLabel = computed(() => {
+  if (!llmEnabled.value) {
+    return 'LLM 未启用';
+  }
+  if (llmUsed.value) {
+    return 'LLM 已生效';
+  }
+  if (llmFallback.value) {
+    return '已回退到规则结果';
+  }
+  return '本轮未调用 LLM';
+});
+const llmErrorLabel = computed(() => {
+  if (!llmError.value) {
+    return '';
+  }
+  if (llmError.value === 'transport_error') {
+    return '供应商 / 网络 / 鉴权 / 额度异常';
+  }
+  if (llmError.value === 'format_error') {
+    return '模型输出格式不可解析';
+  }
+  if (llmError.value === 'safety_reject') {
+    return '模型输出未通过安全约束';
+  }
+  return llmError.value;
+});
 const departmentSummary = computed(() => {
   if (!report.value) {
     return '';
@@ -459,6 +542,10 @@ async function applySessionState(session: TriageSessionDetailResponse) {
   llmFollowUpQuestion.value = session.llm_follow_up_question || '';
   rawReportSummary.value = session.raw_report_summary || '';
   llmReportSummary.value = session.llm_report_summary || '';
+  llmEnabled.value = Boolean(session.llm_enabled);
+  llmProvider.value = session.llm_provider || '';
+  llmModel.value = session.llm_model || '';
+  llmBaseUrl.value = session.llm_base_url || '';
   llmUsed.value = typeof session.llm_used === 'boolean' ? session.llm_used : null;
   llmError.value = session.llm_error || '';
   llmTrace.value = session.llm_trace || [];
@@ -605,6 +692,10 @@ function resetConversation() {
   llmFollowUpQuestion.value = '';
   rawReportSummary.value = '';
   llmReportSummary.value = '';
+  llmEnabled.value = false;
+  llmProvider.value = '';
+  llmModel.value = '';
+  llmBaseUrl.value = '';
   llmUsed.value = null;
   llmError.value = '';
   llmTrace.value = [];

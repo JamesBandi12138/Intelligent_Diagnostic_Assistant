@@ -265,6 +265,10 @@ describe('Triage view', () => {
       agent_trace: [{ agent: 'result_agent', summary: 'status=completed risk=medium' }],
       route_reason: 'all core fields are ready for final triage result',
       knowledge_summary: 'No knowledge hits retrieved for the current triage turn.',
+      llm_enabled: true,
+      llm_provider: 'qwen',
+      llm_model: 'qwen-plus',
+      llm_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
       raw_report_summary: '主诉：喉咙不舒服。目前信息补全后，建议优先咨询耳鼻喉科。',
       llm_report_summary: '根据你补充的情况，目前更建议优先到耳鼻喉科门诊评估喉咙不适。',
       llm_used: true,
@@ -281,5 +285,95 @@ describe('Triage view', () => {
     expect(wrapper.text()).toContain('llm_report_summary');
     expect(wrapper.text()).toContain('rewrite_report_summary');
     expect(wrapper.text()).toContain('llm_used: true');
+  });
+
+  it('shows fallback diagnosis details when llm provider fails', async () => {
+    createTriageSession.mockResolvedValue({ session_id: 'session-1', status: 'created' });
+    analyzeTriage.mockResolvedValue({
+      session_id: 'session-1',
+      status: 'needs_follow_up' as const,
+      risk_level: 'medium' as const,
+      question: '这种不舒服持续多久了？',
+      known_facts_summary: '部位：咽喉',
+      missing_fields: ['duration'],
+    });
+    getTriageSession.mockResolvedValue({
+      session_id: 'session-1',
+      status: 'needs_follow_up',
+      latest_request: null,
+      latest_result: {
+        session_id: 'session-1',
+        status: 'needs_follow_up' as const,
+        risk_level: 'medium' as const,
+        question: '这种不舒服持续多久了？',
+        known_facts_summary: '部位：咽喉',
+        missing_fields: ['duration'],
+      },
+      current_question: '这种不舒服持续多久了？',
+      report_id: null,
+      messages: [],
+      current_agent: 'follow_up_agent',
+      node_trace: ['bootstrap_context', 'supervisor_route', 'follow_up_agent'],
+      agent_trace: [{ agent: 'follow_up_agent', summary: 'question=duration' }],
+      route_reason: 'missing core fields require one follow-up question',
+      knowledge_summary: 'No knowledge hits retrieved for the current triage turn.',
+      llm_enabled: true,
+      llm_provider: 'qwen',
+      llm_model: 'qwen-plus',
+      llm_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      raw_follow_up_question: '这种不舒服持续多久了？',
+      llm_follow_up_question: null,
+      llm_used: false,
+      llm_error: 'transport_error',
+      llm_trace: [{ agent: 'follow_up_agent', task: 'rewrite_follow_up_question', used: false, fallback: true, error: 'transport_error' }],
+    });
+
+    const wrapper = mountView();
+
+    await clickButtonByText(wrapper, '开始导诊');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('LLM 运行状态 / 配置诊断');
+    expect(wrapper.text()).toContain('已回退到规则结果');
+    expect(wrapper.text()).toContain('供应商 / 网络 / 鉴权 / 额度异常');
+    expect(wrapper.text()).toContain('qwen-plus');
+  });
+
+  it('shows llm active status when rewritten output is used', async () => {
+    createTriageSession.mockResolvedValue({ session_id: 'session-1', status: 'created' });
+    analyzeTriage.mockResolvedValue(completedResult);
+    getTriageSession.mockResolvedValue({
+      session_id: 'session-1',
+      status: 'completed',
+      latest_request: null,
+      latest_result: completedResult,
+      current_question: null,
+      report_id: null,
+      messages: [],
+      current_agent: 'result_agent',
+      node_trace: ['bootstrap_context', 'supervisor_route', 'result_agent'],
+      agent_trace: [{ agent: 'result_agent', summary: 'status=completed risk=medium' }],
+      route_reason: 'all core fields are ready for final triage result',
+      knowledge_summary: 'No knowledge hits retrieved for the current triage turn.',
+      llm_enabled: true,
+      llm_provider: 'qwen',
+      llm_model: 'qwen-plus',
+      llm_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      raw_report_summary: '主诉：喉咙不舒服。目前信息补全后，建议优先咨询耳鼻喉科。',
+      llm_report_summary: '根据你补充的情况，目前更建议优先到耳鼻喉科门诊评估喉咙不适。',
+      llm_used: true,
+      llm_error: null,
+      llm_trace: [{ agent: 'result_agent', task: 'rewrite_report_summary', used: true, fallback: false, error: null }],
+    });
+
+    const wrapper = mountView();
+
+    await clickButtonByText(wrapper, '开始导诊');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('LLM 运行状态 / 配置诊断');
+    expect(wrapper.text()).toContain('LLM 已生效');
+    expect(wrapper.text()).toContain('result_agent');
+    expect(wrapper.text()).toContain('rewrite_report_summary');
   });
 });

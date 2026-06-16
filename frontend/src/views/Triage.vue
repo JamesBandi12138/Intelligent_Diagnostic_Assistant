@@ -33,6 +33,18 @@
           />
         </label>
 
+        <div class="example-row" v-if="!hasActiveConversation">
+          <button
+            v-for="example in symptomExamples"
+            :key="example.label"
+            type="button"
+            class="example-chip"
+            @click="useSymptomExample(example.text)"
+          >
+            {{ example.label }}
+          </button>
+        </div>
+
         <div class="starter-grid">
           <label>
             年龄
@@ -291,10 +303,16 @@
           </div>
         </section>
 
-        <details v-if="showDebugPanel || showLlmDiagnostics" class="diagnostic-drawer">
+        <div v-if="hasDiagnostics" class="diagnostic-toggle-row">
+          <button type="button" class="secondary-button diagnostic-toggle" @click="toggleDebugMode">
+            {{ debugMode ? '隐藏开发诊断' : '显示开发诊断' }}
+          </button>
+        </div>
+
+        <details v-if="debugMode && hasDiagnostics" class="diagnostic-drawer" open>
           <summary>开发调试信息</summary>
 
-          <section v-if="showDebugPanel" class="diagnostic-block">
+          <section v-if="hasDebugPanel" class="diagnostic-block">
             <h3>LangGraph 编排</h3>
             <p v-if="currentAgent"><strong>current_agent:</strong> {{ currentAgent }}</p>
             <p v-if="routeReason"><strong>route_reason:</strong> {{ routeReason }}</p>
@@ -307,7 +325,7 @@
             </ul>
           </section>
 
-          <section v-if="showLlmDiagnostics" class="diagnostic-block llm-block">
+          <section v-if="hasLlmDiagnostics" class="diagnostic-block llm-block">
             <h3>LLM 运行状态 / 配置诊断</h3>
             <div class="diagnostic-grid">
               <div>
@@ -384,6 +402,22 @@ import {
 } from '../api';
 
 const SESSION_STORAGE_KEY = 'ida-active-session-id';
+const DEBUG_STORAGE_KEY = 'ida-debug-diagnostics';
+
+const symptomExamples = [
+  {
+    label: '喉咙痛',
+    text: '喉咙痛三天，吞咽时更明显，没有发热。',
+  },
+  {
+    label: '眼睛不舒服',
+    text: '右眼发红发痒两天，有异物感，疼痛大概 2 分，没有视物模糊。',
+  },
+  {
+    label: '肚子痛',
+    text: '肚子痛，从昨晚开始，主要在右下腹，不确定该挂什么科。',
+  },
+];
 
 const factLabels: Record<string, string> = {
   location: '症状部位',
@@ -393,11 +427,11 @@ const factLabels: Record<string, string> = {
   special_context: '特殊背景',
 };
 
-const symptomText = ref('喉咙不舒服');
+const symptomText = ref('');
 const age = ref(32);
 const sex = ref<Sex>('female');
 const pregnancyStatus = ref('');
-const city = ref('北京');
+const city = ref('');
 const medicalHistoryText = ref('');
 const allergiesText = ref('');
 const medicationsText = ref('');
@@ -436,6 +470,7 @@ const reportLoading = ref(false);
 const errorMessage = ref('');
 const sessionError = ref('');
 const reportError = ref('');
+const debugMode = ref(false);
 
 const hasActiveConversation = computed(() => Boolean(activeSessionId.value) && sessionStatus.value !== 'completed');
 const currentRiskLevel = computed<RiskLevel | ''>(() => latestResponse.value?.risk_level ?? '');
@@ -446,7 +481,7 @@ const patientStarterSummary = computed(() => {
   }
   return items.join(' · ');
 });
-const showDebugPanel = computed(
+const hasDebugPanel = computed(
   () =>
     Boolean(currentAgent.value) ||
     nodeTrace.value.length > 0 ||
@@ -454,7 +489,7 @@ const showDebugPanel = computed(
     Boolean(routeReason.value) ||
     Boolean(knowledgeSummary.value),
 );
-const showLlmDiagnostics = computed(
+const hasLlmDiagnostics = computed(
   () =>
     llmEnabled.value ||
     Boolean(llmProvider.value) ||
@@ -468,6 +503,7 @@ const showLlmDiagnostics = computed(
     Boolean(rawReportSummary.value) ||
     Boolean(llmReportSummary.value),
 );
+const hasDiagnostics = computed(() => hasDebugPanel.value || hasLlmDiagnostics.value);
 const lastLlmTraceEntry = computed(() => llmTrace.value[llmTrace.value.length - 1] || null);
 const llmFallback = computed(() => Boolean(lastLlmTraceEntry.value?.fallback));
 const llmStatusLabel = computed(() => {
@@ -526,6 +562,19 @@ function splitList(value: string): string[] {
 
 function joinList(items: string[]): string {
   return items.length ? items.join('、') : '无';
+}
+
+function useSymptomExample(text: string) {
+  symptomText.value = text;
+}
+
+function toggleDebugMode() {
+  debugMode.value = !debugMode.value;
+  if (debugMode.value) {
+    localStorage.setItem(DEBUG_STORAGE_KEY, 'true');
+    return;
+  }
+  localStorage.removeItem(DEBUG_STORAGE_KEY);
 }
 
 function persistSessionId(sessionId: string | null) {
@@ -728,10 +777,13 @@ function resetConversation() {
   errorMessage.value = '';
   sessionError.value = '';
   reportError.value = '';
+  debugMode.value = false;
+  localStorage.removeItem(DEBUG_STORAGE_KEY);
   persistSessionId(null);
 }
 
 onMounted(async () => {
+  debugMode.value = localStorage.getItem(DEBUG_STORAGE_KEY) === 'true';
   const storedSessionId = localStorage.getItem(SESSION_STORAGE_KEY);
   if (!storedSessionId) {
     return;

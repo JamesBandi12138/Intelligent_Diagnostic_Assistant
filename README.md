@@ -34,7 +34,7 @@
 | 模块 | 技术 |
 |---|---|
 | 多 Agent 编排 | LangGraph Supervisor、StateGraph、conditional edges、checkpoint |
-| LLM 接入 | 通义千问 / DeepSeek / 医疗领域模型，OpenAI-compatible API |
+| LLM 接入 | DeepSeek / 通义千问 / 医疗领域模型，OpenAI-compatible API |
 | 工具调用 | LangChain tools，Tavily 搜索，医院/科室信息检索 |
 | 可选知识库 | 简单 RAG，面向常见症状、科室规则、就医指南 |
 | 后端 | Python 3.11、FastAPI、Pydantic |
@@ -62,15 +62,15 @@
 └──┬──────────────┬────────────────┬────────────────┬───────┘
    │              │                │                │
 ┌──▼────────┐ ┌───▼──────────┐ ┌───▼────────────┐ ┌──▼────────────┐
-│ Safety   │ │ Symptom       │ │ Triage         │ │ Guide &       │
-│ Guardrail│ │ Analyzer      │ │ Recommender    │ │ Explainer     │
+│ Safety   │ │ Symptom       │ │ Follow-up      │ │ Department    │
+│ Guardrail│ │ Intake        │ │ Agent          │ │ Agent         │
 └──────────┘ └──────────────┘ └────────────────┘ └───────────────┘
    │              │                │                │
    └──────────────▼────────────────▼────────────────▼────────────┐
-                     Report Generator / Memory / Logs             │
+                     Report Agent / Memory / Logs                  │
 ┌─────────────────────────────────────────────────────────────────▼┐
-│ MySQL 业务数据 · PostgreSQL 对话记忆 · Redis checkpoint/cache     │
-│ MinIO 报告附件 · Milvus/Tavily 可选知识与医院信息检索             │
+│ Redis 会话缓存 · MySQL/PostgreSQL 后续持久化 · MinIO 报告附件     │
+│ Milvus/Tavily 作为后续可选知识与医院信息检索                     │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -79,11 +79,11 @@
 | Agent | 职责 | 输出 |
 |---|---|---|
 | Supervisor / Planner | 统一编排流程，判断是否需要追问、搜索、急诊提示或生成报告 | 下一步路由、任务状态 |
-| Safety Guardrail Agent | 识别急危重症红旗信号和不应回答的医疗边界 | 风险等级、急诊建议、安全提示 |
-| Symptom Analyzer Agent | 解析用户症状，提取结构化患者画像 | 症状 profile、缺失字段 |
-| Triage Recommender Agent | 推荐科室、就医方式、检查准备方向 | 科室建议、线上/线下路径 |
-| Guide & Explainer Agent | 用患者能理解的语言生成就医指导 | 准备清单、注意事项、解释 |
-| Report Generator | 生成医生可快速阅读的导诊摘要 | 就医报告 |
+| Safety Guardrail Agent | 识别急危重症红旗信号和不应回答的医疗边界，规则优先兜底 | 风险等级、急诊建议、安全提示 |
+| Symptom Intake Agent | 使用 DeepSeek 解析用户自然语言症状，提取结构化患者画像 | 症状 profile、缺失字段 |
+| Follow-up Agent | 根据缺失信息一次只生成一个关键追问 | 追问问题、追问理由 |
+| Department Agent | 推荐科室、就医方式、检查准备方向 | 科室建议、线上/线下路径 |
+| Report Agent | 生成患者可执行建议和医生可快速阅读的导诊摘要 | 就医报告 |
 
 ## 推荐目录结构
 
@@ -100,9 +100,9 @@
 │   │   └── clients/
 │   ├── services/
 │   │   ├── triage_graph/
-│   │   ├── symptom_analyzer/
-│   │   ├── triage_recommender/
-│   │   ├── guide_explainer/
+│   │   ├── symptom_intake/
+│   │   ├── follow_up/
+│   │   ├── department_recommendation/
 │   │   ├── safety_guardrails/
 │   │   └── report_generation/
 │   ├── tests/
@@ -147,7 +147,7 @@
 | Redis 7 | 缓存、队列、临时状态、限流 | Docker Compose 自动拉取 `redis:7-alpine` | 默认端口 `6380` |
 | MinIO | 存储报告 PDF、上传附件、检查报告图片 | Docker Compose 自动拉取 `minio/minio` | API `9002`，控制台 `9003` |
 | Milvus | 可选向量库，用于常见症状/科室规则/指南 RAG | [Milvus Docker 文档](https://milvus.io/docs/install_standalone-docker.md) | 当前未默认启动，后续知识库阶段加入 |
-| 通义千问 / DeepSeek | 中文 LLM 推理 | 阿里云百炼 DashScope / DeepSeek 开放平台 | 通过 OpenAI-compatible API 配置 |
+| DeepSeek / 通义千问 | 中文 LLM 推理 | DeepSeek 开放平台 / 阿里云百炼 DashScope | 当前默认 DeepSeek，通过 OpenAI-compatible API 配置 |
 | Embedding 模型 | 可选 RAG 向量化 | DashScope embedding API 或本地 `BAAI/bge-m3` | 知识库阶段启用 |
 | Tavily | 医院、科室、医生公开信息检索 | [Tavily 官网](https://tavily.com/) | 设置 `TAVILY_API_KEY` 后启用 |
 | LangSmith | LangGraph 流程追踪与调试 | [LangSmith 官网](https://smith.langchain.com/) | 设置 `LANGSMITH_TRACING=true` 后启用 |
@@ -162,12 +162,14 @@ python -m pip install -r backend\requirements.txt
 
 ### 模型配置建议
 
-开发阶段建议先使用云端 OpenAI-compatible API，减少本地模型部署成本：
+开发阶段建议先使用 DeepSeek 云端 OpenAI-compatible API，减少本地模型部署成本：
 
 ```env
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_API_KEY=你的 API Key
-LLM_MODEL=qwen-plus
+LLM_PROVIDER=deepseek
+LLM_BASE_URL=https://api.deepseek.com
+LLM_API_KEY=你的 DeepSeek API Key
+LLM_MODEL=deepseek-v4-flash
+ENABLE_LLM_TRIAGE=true
 ```
 
 知识库阶段再启用 embedding 和 Milvus：
@@ -213,12 +215,15 @@ docker compose up -d --build
 
 ## 当前开发状态
 
-当前版本是项目初始框架，重点是：
+当前版本已经从“框架 demo”推进到可本地体验的导诊 MVP，重点是：
 
 - 明确中国诊前导诊场景。
 - 明确系统安全边界。
 - 搭建 FastAPI + Vue3 + LangGraph 风格的目录骨架。
-- 提供基础 API schema、示例路由、提示词模板和文档。
+- 提供基础 API schema、示例路由、提示词模板、DeepSeek 接入配置和文档。
+- 当前后端已让 DeepSeek 参与症状结构化抽取，并保留规则安全兜底与回退。
+- 前端已改成患者优先的分诊台体验：空白症状输入、快捷示例、调试信息默认隐藏。
+- 已覆盖眼部不适到眼科、咽喉不适到耳鼻喉科、急危重症到急诊等基础路径。
 
 暂不包含：
 
@@ -243,9 +248,9 @@ docker compose up -d --build
 
 ## 简历描述示例
 
-- 基于 LangGraph 构建诊前智能导诊多 Agent 系统，采用 Supervisor 架构编排 Safety Guardrail、Symptom Analyzer、Triage Recommender、Guide Explainer 等 Agent，面向中国患者“挂错科、反复就医、就医准备不足”等真实痛点提供辅助分诊和就医路径建议。
-- 设计 Human-in-the-Loop 信息补全机制与 conditional routing，根据症状风险等级动态路由至急诊提示、补充追问或科室推荐流程，提升医疗场景下多 Agent 输出的可控性和安全性。
-- 参考生产级 RAG 项目工程结构，使用 FastAPI、Vue3、OpenAI-compatible LLM、Tavily 和可选 RAG 知识库搭建端到端导诊框架，并通过外置 prompts、结构化 schema 和日志记录提升可维护性。
+- 基于 LangGraph 构建诊前智能导诊多 Agent 系统，采用 Supervisor 架构编排 Safety Guardrail、Symptom Intake、Follow-up、Department、Report 等 Agent，面向中国患者“挂错科、反复就医、就医准备不足”等真实痛点提供辅助分诊和就医路径建议。
+- 接入 DeepSeek OpenAI-compatible API，让模型参与症状结构化抽取、追问生成和报告表达，同时通过规则层对红旗症状和明确事实进行兜底纠偏，降低医疗场景下模型误判风险。
+- 设计患者优先的 Vue3 分诊台界面，首屏减少表单负担，调试信息默认隐藏，导诊结果聚焦科室建议、就医路径和医生可读摘要。
 
 ## 文档
 
@@ -256,3 +261,4 @@ docker compose up -d --build
 - [部署说明](docs/deploy.md)
 - [工具与模型使用说明](docs/tooling.md)
 - [开发计划](docs/roadmap.md)
+- [DeepSeek 多 Agent 导诊与患者体验重构设计](docs/superpowers/specs/2026-06-16-deepseek-multi-agent-patient-experience-design.md)

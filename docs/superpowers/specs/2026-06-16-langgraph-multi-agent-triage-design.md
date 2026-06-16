@@ -2,7 +2,9 @@
 
 日期：2026-06-16
 项目：Intelligent Diagnostic Assistant
-状态：已确认设计方向，待进入实现计划
+状态：基础多 Agent 设计，已由患者体验与 DeepSeek 接入方案补充
+
+> 说明：本文定义了 LangGraph 多 Agent 的基础形态。当前最新产品与模型接入方向见 `docs/superpowers/specs/2026-06-16-deepseek-multi-agent-patient-experience-design.md`，强调患者无感的内部多 Agent 分工、DeepSeek 结构化输出和简化操作体验。
 
 ## 1. 目标
 

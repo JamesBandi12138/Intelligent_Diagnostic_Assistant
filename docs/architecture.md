@@ -17,11 +17,13 @@ Vue 3 前端
   └─ FastAPI API 网关
       └─ LangGraph Supervisor
           ├─ Safety Guardrail Agent
-          ├─ Symptom Analyzer Agent
-          ├─ Triage Recommender Agent
-          ├─ Guide & Explainer Agent
-          └─ Report Generator
+          ├─ Symptom Intake Agent
+          ├─ Follow-up Agent
+          ├─ Department Agent
+          └─ Report Agent
 ```
+
+当前阶段采用“患者无感、内部真实分工”的多 Agent 方案。前端不把 Agent 名称作为主体验展示，患者只看到清晰的导诊流程；Agent Trace 和 LLM Trace 仅用于开发调试。
 
 ## 与 ScholarMind 的参考关系
 
@@ -51,10 +53,13 @@ ScholarMind 提供的是成熟工程组织方式，本项目借鉴：
 
 ```text
 输入症状
-  ├─ 命中急危重症红旗 → 输出急诊提示
-  ├─ 关键信息不足 → 追问用户
-  └─ 信息足够 → 科室推荐 → 就医指导 → 报告生成
+  ├─ Safety Agent 命中急危重症红旗 → 输出急诊提示
+  └─ Symptom Intake Agent 结构化症状
+      ├─ 关键信息不足 → Follow-up Agent 只追问一个问题
+      └─ 信息足够 → Department Agent 科室推荐 → Report Agent 就医摘要
 ```
+
+DeepSeek 通过 OpenAI-compatible API 接入，参与结构化理解、追问生成、科室推荐理由和报告表达；红旗症状、禁答边界和急诊升级仍由规则优先兜底。
 
 ## 数据存储建议
 
@@ -71,4 +76,3 @@ ScholarMind 提供的是成熟工程组织方式，本项目借鉴：
 - 支持语音输入和 OCR 识别检查报告。
 - 支持慢病随访、复诊提醒、电子病历摘要。
 - 增加医生审核后台，用于评估导诊建议质量。
-

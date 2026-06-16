@@ -8,13 +8,13 @@ class Settings(BaseSettings):
     APP_PORT: int = 8000
     CORS_ORIGINS: list[str] = ["*"]
 
-    LLM_PROVIDER: str = "qwen"
-    LLM_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    LLM_API_KEY: str = "replace-with-your-api-key"
-    LLM_MODEL: str = "qwen-plus"
+    LLM_PROVIDER: str = "deepseek"
+    LLM_BASE_URL: str = "https://api.deepseek.com"
+    LLM_API_KEY: str = "replace-with-your-deepseek-api-key"
+    LLM_MODEL: str = "deepseek-v4-flash"
     LLM_TEMPERATURE: float = 0.2
     LLM_MAX_TOKENS: int = 2048
-    ENABLE_LLM_TRIAGE: bool = False
+    ENABLE_LLM_TRIAGE: bool = True
 
     ENABLE_TAVILY_SEARCH: bool = False
     TAVILY_API_KEY: str = ""

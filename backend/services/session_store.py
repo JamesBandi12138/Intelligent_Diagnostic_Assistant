@@ -20,6 +20,7 @@ class SessionRecord:
     symptom_text: str | None = None
     extracted_facts: dict[str, str] = field(default_factory=dict)
     missing_fields: list[str] = field(default_factory=list)
+    fact_confidence: dict[str, str] = field(default_factory=dict)
     answered_follow_ups: list[str] = field(default_factory=list)
     current_question: str | None = None
     risk_level: str | None = None
@@ -51,6 +52,7 @@ class SessionRecord:
             "symptom_text": self.symptom_text,
             "extracted_facts": self.extracted_facts,
             "missing_fields": self.missing_fields,
+            "fact_confidence": self.fact_confidence,
             "answered_follow_ups": self.answered_follow_ups,
             "current_question": self.current_question,
             "risk_level": self.risk_level,
@@ -87,6 +89,7 @@ class SessionRecord:
             symptom_text=payload.get("symptom_text"),
             extracted_facts=payload.get("extracted_facts", {}),
             missing_fields=payload.get("missing_fields", []),
+            fact_confidence=payload.get("fact_confidence", {}),
             answered_follow_ups=payload.get("answered_follow_ups", []),
             current_question=payload.get("current_question"),
             risk_level=payload.get("risk_level"),

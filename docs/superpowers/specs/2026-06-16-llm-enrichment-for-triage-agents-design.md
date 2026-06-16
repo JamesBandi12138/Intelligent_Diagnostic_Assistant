@@ -2,7 +2,9 @@
 
 日期：2026-06-16
 项目：Intelligent Diagnostic Assistant
-状态：设计完成，待实现
+状态：已被 DeepSeek 多 Agent 导诊与患者体验重构设计取代
+
+> 说明：本文记录了早期“规则底稿 + LLM 润色”的过渡方案。当前项目方向已升级为 DeepSeek 参与结构化理解、追问、科室建议和报告生成。最新设计见 `docs/superpowers/specs/2026-06-16-deepseek-multi-agent-patient-experience-design.md`。
 
 ## 1. 目标
 

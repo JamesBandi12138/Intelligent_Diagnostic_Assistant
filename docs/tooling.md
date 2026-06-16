@@ -87,17 +87,21 @@ milvus:
 
 推荐优先使用云端 OpenAI-compatible API：
 
-- 通义千问：适合中文对话和导诊解释。
-- DeepSeek：适合推理和结构化输出。
+- DeepSeek：当前默认接入，适合中文推理、结构化输出和导诊解释。
+- 通义千问：可作为备选中文对话模型。
 - 医疗领域模型：需要额外评估安全性和合规性。
 
 `.env` 示例：
 
 ```env
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_API_KEY=replace-with-your-api-key
-LLM_MODEL=qwen-plus
+LLM_PROVIDER=deepseek
+LLM_BASE_URL=https://api.deepseek.com
+LLM_API_KEY=replace-with-your-deepseek-api-key
+LLM_MODEL=deepseek-v4-flash
+ENABLE_LLM_TRIAGE=true
 ```
+
+真实 API key 只放在本地 `backend/.env`，不要写入 README、设计文档或提交记录。
 
 ### Embedding 模型
 
@@ -136,6 +140,6 @@ LANGSMITH_API_KEY=replace-with-your-langsmith-key
 
 1. 只启动后端和前端，验证 API/页面框架。
 2. 启动 MySQL、PostgreSQL、Redis、MinIO，补会话和报告存储。
-3. 接入 LLM，替换 deterministic skeleton。
+3. 接入 DeepSeek LLM，替换仅靠规则模板的导诊输出。
 4. 接入 Tavily，补医院/科室公开信息检索。
 5. 接入 Milvus + embedding，建设人工审核后的知识库。

@@ -101,10 +101,25 @@ async function clickButtonByText(wrapper: VueWrapper, label: string) {
   await target!.trigger('click');
 }
 
+async function startTriage(wrapper: VueWrapper, symptom = '喉咙痛三天，吞咽时更明显，没有发热。') {
+  await wrapper.find<HTMLTextAreaElement>('#symptom').setValue(symptom);
+  await clickButtonByText(wrapper, '开始导诊');
+}
+
 describe('Triage view', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+  });
+
+  it('starts with an empty symptom box and lets patients use a quick example', async () => {
+    const wrapper = mountView();
+
+    expect(wrapper.find<HTMLTextAreaElement>('#symptom').element.value).toBe('');
+
+    await clickButtonByText(wrapper, '喉咙痛');
+
+    expect(wrapper.find<HTMLTextAreaElement>('#symptom').element.value).toContain('喉咙痛三天');
   });
 
   it('shows the report generation action after triage completes', async () => {
@@ -132,7 +147,7 @@ describe('Triage view', () => {
 
     const wrapper = mountView();
 
-    await clickButtonByText(wrapper, '开始导诊');
+    await startTriage(wrapper);
     await flushPromises();
 
     expect(wrapper.text()).toContain('生成导诊报告');
@@ -185,7 +200,7 @@ describe('Triage view', () => {
 
     const wrapper = mountView();
 
-    await clickButtonByText(wrapper, '开始导诊');
+    await startTriage(wrapper);
     await flushPromises();
     await clickButtonByText(wrapper, '生成导诊报告');
     await flushPromises();
@@ -195,7 +210,7 @@ describe('Triage view', () => {
     expect(wrapper.text()).toContain('建议优先就诊：耳鼻喉科');
   });
 
-  it('shows orchestration debug details after loading a follow-up session', async () => {
+  it('keeps orchestration debug details hidden until explicitly enabled', async () => {
     createTriageSession.mockResolvedValue({ session_id: 'session-1', status: 'created' });
     analyzeTriage.mockResolvedValue({
       session_id: 'session-1',
@@ -237,8 +252,13 @@ describe('Triage view', () => {
 
     const wrapper = mountView();
 
-    await clickButtonByText(wrapper, '开始导诊');
+    await startTriage(wrapper);
     await flushPromises();
+
+    expect(wrapper.text()).not.toContain('follow_up_agent');
+    expect(wrapper.text()).not.toContain('No knowledge hits retrieved for the current triage turn.');
+
+    await clickButtonByText(wrapper, '显示开发诊断');
 
     expect(wrapper.text()).toContain('follow_up_agent');
     expect(wrapper.text()).toContain('knowledge_agent');
@@ -279,8 +299,10 @@ describe('Triage view', () => {
 
     const wrapper = mountView();
 
-    await clickButtonByText(wrapper, '开始导诊');
+    await startTriage(wrapper);
     await flushPromises();
+
+    await clickButtonByText(wrapper, '显示开发诊断');
 
     expect(wrapper.text()).toContain('summary_raw');
     expect(wrapper.text()).toContain('summary_llm');
@@ -331,8 +353,10 @@ describe('Triage view', () => {
 
     const wrapper = mountView();
 
-    await clickButtonByText(wrapper, '开始导诊');
+    await startTriage(wrapper);
     await flushPromises();
+
+    await clickButtonByText(wrapper, '显示开发诊断');
 
     expect(wrapper.text()).toContain('LLM 运行状态 / 配置诊断');
     expect(wrapper.text()).toContain('已回退到规则结果');
@@ -369,8 +393,10 @@ describe('Triage view', () => {
 
     const wrapper = mountView();
 
-    await clickButtonByText(wrapper, '开始导诊');
+    await startTriage(wrapper);
     await flushPromises();
+
+    await clickButtonByText(wrapper, '显示开发诊断');
 
     expect(wrapper.text()).toContain('LLM 运行状态 / 配置诊断');
     expect(wrapper.text()).toContain('LLM 已生效');

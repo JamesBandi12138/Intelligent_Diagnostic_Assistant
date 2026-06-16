@@ -3,6 +3,7 @@ import asyncio
 from app.schemas.triage import PatientProfile, TriageRequest
 from services.safety_guardrails.service import detect_risk
 from services.triage_graph.graph import run_triage
+from services.triage_graph.graph import _extract_facts
 
 
 def test_detect_risk_marks_persistent_fever_and_cough_as_high():
@@ -24,6 +25,12 @@ def test_detect_risk_does_not_escalate_when_common_symptoms_are_explicitly_denie
 
     assert risk_level in ("low", "medium")
     assert emergency_advice is None
+
+
+def test_extract_facts_does_not_mark_chronic_disease_when_explicitly_denied():
+    _, _, flags = _extract_facts("右眼发红两天，没有慢性病", PatientProfile(age=31, sex="female"))
+
+    assert flags["chronic_disease"] is False
 
 
 def test_run_triage_keeps_high_risk_cases_in_follow_up_when_not_emergency():

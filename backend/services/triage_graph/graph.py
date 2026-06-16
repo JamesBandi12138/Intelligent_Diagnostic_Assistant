@@ -129,13 +129,13 @@ def _chief_complaint_text(state: TriageGraphState, combined_text: str) -> str:
 
 
 def _special_context_flags(patient: PatientProfile | None, text: str) -> dict[str, bool]:
+    chronic_denied = any(token in text for token in ("没有慢性病", "无慢性病"))
     return {
         "pregnancy": bool(patient and patient.pregnancy_status) or ("怀孕" in text),
         "elderly": bool(patient and patient.age >= 65),
         "child": bool(patient and patient.age <= 6),
-        "chronic_disease": bool(patient and patient.medical_history) or any(
-            token in text for token in ("高血压", "糖尿病", "慢性病")
-        ),
+        "chronic_disease": (bool(patient and patient.medical_history) or any(token in text for token in ("高血压", "糖尿病", "慢性病")))
+        and not chronic_denied,
         "post_surgery": "术后" in text,
     }
 
@@ -145,6 +145,7 @@ def _extract_facts(text: str, patient: PatientProfile | None) -> tuple[dict[str,
     confidence: dict[str, str] = {}
 
     location_matchers = (
+        ("眼部", ("眼", "视物", "眼红", "眼痒", "眼痛", "异物感")),
         ("咽喉", ("喉咙", "咽痛", "吞咽")),
         ("胸部", ("胸痛", "胸闷", "胸口")),
         ("腹部", ("腹痛", "胃痛", "肚子")),
@@ -219,6 +220,65 @@ def _missing_fields(facts: dict[str, str]) -> list[str]:
     return [field for field in FIELD_ORDER if field not in facts]
 
 
+def _sanitize_llm_facts(payload: dict) -> tuple[dict[str, str], list[str]]:
+    raw_facts = payload.get("facts")
+    if not isinstance(raw_facts, dict):
+        return {}, FIELD_ORDER.copy()
+
+    facts: dict[str, str] = {}
+    for field_name in FIELD_ORDER:
+        value = raw_facts.get(field_name)
+        if isinstance(value, str) and value.strip():
+            facts[field_name] = value.strip()
+
+    raw_missing = payload.get("missing_fields")
+    if isinstance(raw_missing, list):
+        missing_fields = [
+            item
+            for item in raw_missing
+            if isinstance(item, str) and item in FIELD_ORDER and item not in facts
+        ]
+    else:
+        missing_fields = _missing_fields(facts)
+
+    return facts, missing_fields
+
+
+async def _extract_facts_with_llm(
+    *,
+    llm_client,
+    combined_text: str,
+    patient: PatientProfile | None,
+    city: str | None,
+) -> tuple[dict[str, str] | None, list[str] | None, str | None]:
+    if llm_client is None:
+        return None, None, None
+
+    patient_payload = patient.model_dump(mode="json") if patient else None
+    prompt = (
+        "You are the Symptom Intake Agent for a Chinese pre-visit triage assistant.\n"
+        "Extract only facts stated by the user or patient profile. Do not diagnose.\n"
+        "Use concise Chinese values.\n"
+        "Required fact keys: location, duration, severity, accompanying_symptoms, special_context.\n"
+        "If a key is unknown, omit it and include the key in missing_fields.\n"
+        "special_context should include pregnancy, chronic disease, elderly/child, surgery, medication, or explicit denial such as 无慢性病.\n"
+        f"patient_profile: {json.dumps(patient_payload, ensure_ascii=False)}\n"
+        f"city: {city or ''}\n"
+        f"user_text: {combined_text}\n"
+        'Return JSON only like {"facts":{"location":"..."},"missing_fields":["duration"]}'
+    )
+    try:
+        payload = await _call_llm_json(llm_client, prompt, max_tokens=360)
+        facts, missing_fields = _sanitize_llm_facts(payload)
+        if not facts:
+            return None, None, "format_error"
+        return facts, missing_fields, None
+    except json.JSONDecodeError:
+        return None, None, "format_error"
+    except Exception as error:
+        return None, None, _classify_llm_error(error)
+
+
 def _choose_follow_up_field(state: TriageGraphState, combined_text: str) -> str:
     facts = state.get("extracted_facts", {})
     missing_fields = list(state.get("missing_fields", []))
@@ -273,6 +333,12 @@ def _build_care_path(risk_level: RiskLevel) -> str:
 
 def _recommend_department(symptom_text: str) -> DepartmentRecommendation:
     positive_text = re.sub(r"(没有|无)([^，。；,;]*)", "", symptom_text)
+    if any(keyword in positive_text for keyword in ("眼", "视物", "眼红", "眼痒", "异物感", "眼痛")):
+        return DepartmentRecommendation(
+            name="眼科",
+            reason="症状集中在眼部或视物相关不适，适合优先由眼科评估。",
+            priority=1,
+        )
     if any(keyword in positive_text for keyword in ("咳嗽", "咳痰", "气促", "呼吸急促", "胸痛", "胸闷")):
         return DepartmentRecommendation(
             name="呼吸内科",
@@ -332,6 +398,13 @@ def _build_llm_trace(
 
 
 async def _call_llm_json(llm_client, prompt: str, max_tokens: int = 240) -> dict:
+    provider_options = {}
+    if settings.LLM_PROVIDER.lower() == "deepseek":
+        provider_options = {
+            "response_format": {"type": "json_object"},
+            "extra_body": {"thinking": {"type": "disabled"}},
+        }
+
     response = await llm_client.chat.completions.create(
         model=settings.LLM_MODEL,
         temperature=settings.LLM_TEMPERATURE,
@@ -340,6 +413,7 @@ async def _call_llm_json(llm_client, prompt: str, max_tokens: int = 240) -> dict
             {"role": "system", "content": "You are a careful Chinese triage writing assistant."},
             {"role": "user", "content": prompt},
         ],
+        **provider_options,
     )
     content = response.choices[0].message.content.strip()
     if content.startswith("```"):
@@ -545,18 +619,48 @@ def _safety_agent(state: TriageGraphState) -> TriageGraphState:
     }
 
 
-def _triage_agent(state: TriageGraphState) -> TriageGraphState:
+async def _triage_agent(state: TriageGraphState) -> TriageGraphState:
     node_trace = _trace_node(state, "triage_agent")
     combined_text = _combined_text_from_parts(
         state.get("symptom_text"),
         state.get("latest_answer"),
         state.get("conversation_messages", []),
     )
-    facts, confidence, flags = _extract_facts(combined_text, state.get("patient"))
-    missing_fields = _missing_fields(facts)
+    rule_facts, rule_confidence, flags = _extract_facts(combined_text, state.get("patient"))
+    llm_facts, llm_missing_fields, llm_error = await _extract_facts_with_llm(
+        llm_client=state.get("llm_client"),
+        combined_text=combined_text,
+        patient=state.get("patient"),
+        city=state.get("city"),
+    )
+
+    if llm_facts is not None:
+        facts = {**llm_facts, **rule_facts}
+        confidence = {**{key: "llm" for key in llm_facts}, **rule_confidence}
+        missing_fields = llm_missing_fields if llm_missing_fields is not None else _missing_fields(facts)
+        llm_used = True
+    else:
+        facts = rule_facts
+        confidence = rule_confidence
+        missing_fields = _missing_fields(facts)
+        llm_used = False
+
+    missing_fields = [field for field in missing_fields if field in FIELD_ORDER and field not in facts]
+    llm_trace = _build_llm_trace(
+        agent="triage_agent",
+        task="extract_structured_symptoms",
+        used=llm_used,
+        fallback=not llm_used,
+        error=llm_error,
+        existing=state.get("llm_trace"),
+    )
     return {
         "node_trace": node_trace,
-        "agent_trace": _trace_agent(state, "triage_agent", f"facts={len(facts)} missing={len(missing_fields)}"),
+        "agent_trace": _trace_agent(
+            state,
+            "triage_agent",
+            f"facts={len(facts)} missing={len(missing_fields)} llm_used={llm_used}",
+        ),
         "current_agent": "triage_agent",
         "extracted_facts": facts,
         "missing_fields": missing_fields,
@@ -564,6 +668,9 @@ def _triage_agent(state: TriageGraphState) -> TriageGraphState:
         "special_context_flags": flags,
         "workflow_status": "facts_updated",
         "facts_updated": True,
+        "llm_used": bool(state.get("llm_used")) or llm_used,
+        "llm_error": llm_error,
+        "llm_trace": llm_trace,
     }
 
 
@@ -749,6 +856,7 @@ def _persist_state(state: TriageGraphState) -> TriageGraphState:
     record.symptom_text = state.get("symptom_text") or record.symptom_text
     record.extracted_facts = dict(state.get("extracted_facts", {}))
     record.missing_fields = list(state.get("missing_fields", []))
+    record.fact_confidence = dict(state.get("fact_confidence", {}))
     if state.get("latest_answer"):
         if not record.answered_follow_ups or record.answered_follow_ups[-1] != state["latest_answer"]:
             record.answered_follow_ups.append(state["latest_answer"])

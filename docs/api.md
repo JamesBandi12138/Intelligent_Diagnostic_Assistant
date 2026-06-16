@@ -198,14 +198,14 @@ Base URL: `http://localhost:8000`
 
 这些字段用于调试和可视化，不影响原有导诊主结果结构。
 
-LLM 润色与回退相关的调试字段也会在 `GET /api/triage/sessions/{session_id}` 中返回：
+LLM 结构化抽取、润色与回退相关的调试字段也会在 `GET /api/triage/sessions/{session_id}` 中返回：
 
 ```json
 {
   "llm_enabled": true,
-  "llm_provider": "qwen",
-  "llm_model": "qwen-plus",
-  "llm_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "llm_provider": "deepseek",
+  "llm_model": "deepseek-v4-flash",
+  "llm_base_url": "https://api.deepseek.com",
   "raw_follow_up_question": "这种不舒服持续多久了？",
   "llm_follow_up_question": "这种不舒服大概持续多久了，是突然开始还是慢慢加重的？",
   "raw_report_summary": "主诉：喉咙不舒服。目前信息补全后，建议优先咨询耳鼻喉科。",
@@ -213,6 +213,13 @@ LLM 润色与回退相关的调试字段也会在 `GET /api/triage/sessions/{ses
   "llm_used": true,
   "llm_error": null,
   "llm_trace": [
+    {
+      "agent": "triage_agent",
+      "task": "extract_structured_symptoms",
+      "used": true,
+      "fallback": false,
+      "error": null
+    },
     {
       "agent": "follow_up_agent",
       "task": "rewrite_follow_up_question",
@@ -231,12 +238,14 @@ LLM 润色与回退相关的调试字段也会在 `GET /api/triage/sessions/{ses
 }
 ```
 
+- `extract_structured_symptoms` 表示 DeepSeek 参与症状结构化抽取；规则层仍会对明确事实进行兜底纠偏。
 - `raw_follow_up_question` / `raw_report_summary` 是规则层生成的原始文本。
 - `llm_follow_up_question` / `llm_report_summary` 是 LLM 润色后的最终文本。
 - `llm_enabled` / `llm_provider` / `llm_model` / `llm_base_url` 用于前端展示当前服务的 LLM 运行配置。
 - `llm_used=false` 表示本轮回落到了规则结果，`llm_error` 用于区分 `transport_error`、`format_error` 或 `safety_reject`。
 - `transport_error` 不只包含网络超时，也包含模型供应商返回的鉴权、额度不足、欠费或访问被拒绝等运行时错误。
 - `llm_trace` 用于查看每个 agent 的 LLM 调用参与情况。
+- 前端患者主流程默认不展示这些调试字段；需要排查时，可在页面中手动打开“开发诊断”。
 
 ## `POST /api/reports`
 

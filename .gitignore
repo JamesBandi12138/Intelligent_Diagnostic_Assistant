@@ -21,8 +21,11 @@ data/
 logs/
 *.sqlite3
 .runtime/
+.superpowers/
 backend-live.log
 frontend-live.log
+backend-live.err.log
+frontend-live.err.log
 
 # IDE
 .idea/

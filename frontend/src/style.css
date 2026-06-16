@@ -1,22 +1,18 @@
 :root {
-  --bg: #f3efe6;
-  --bg-soft: #fbf8f1;
-  --panel: rgba(255, 252, 247, 0.92);
-  --panel-strong: #fffdf9;
-  --ink: #1d2430;
-  --ink-soft: #5e6775;
-  --line: rgba(37, 44, 60, 0.1);
+  --bg: #eef3f6;
+  --bg-soft: #f7fafc;
+  --panel: #ffffff;
+  --panel-strong: #ffffff;
+  --ink: #17212f;
+  --ink-soft: #5b6675;
+  --line: rgba(23, 33, 47, 0.12);
   --teal: #0f766e;
-  --teal-deep: #0b4f5f;
-  --sand: #f1dcc0;
-  --warn: #b76a1b;
-  --danger: #a23f2b;
-  --shadow: 0 26px 70px rgba(38, 34, 25, 0.08);
+  --teal-deep: #0b5f59;
+  --warn: #9a6700;
+  --danger: #b42318;
+  --shadow: 0 10px 28px rgba(23, 33, 47, 0.08);
   color: var(--ink);
-  background:
-    radial-gradient(circle at top left, rgba(193, 225, 215, 0.9), transparent 32%),
-    radial-gradient(circle at right 12%, rgba(241, 220, 192, 0.8), transparent 26%),
-    linear-gradient(180deg, #f8f3eb 0%, #efe8dd 100%);
+  background: var(--bg);
   font-family:
     "HarmonyOS Sans SC",
     "Microsoft YaHei",
@@ -52,9 +48,9 @@ textarea {
 
 button {
   border: 0;
-  border-radius: 16px;
+  border-radius: 8px;
   padding: 13px 18px;
-  background: linear-gradient(135deg, var(--teal), var(--teal-deep));
+  background: var(--teal);
   color: #fff;
   font-weight: 700;
   cursor: pointer;
@@ -83,7 +79,7 @@ select,
 textarea {
   width: 100%;
   border: 1px solid rgba(27, 36, 52, 0.12);
-  border-radius: 16px;
+  border-radius: 8px;
   padding: 13px 14px;
   color: var(--ink);
   background: rgba(255, 255, 255, 0.92);
@@ -103,9 +99,9 @@ p {
 
 h1 {
   margin-bottom: 14px;
-  font-size: clamp(2.5rem, 4vw, 4.1rem);
-  line-height: 0.98;
-  letter-spacing: -0.04em;
+  font-size: clamp(2rem, 3vw, 3rem);
+  line-height: 1.08;
+  letter-spacing: 0;
 }
 
 h2 {
@@ -129,7 +125,7 @@ li + li {
 
 .app-shell {
   min-height: 100vh;
-  padding: 28px;
+  padding: 22px;
 }
 
 .hero-band,
@@ -141,10 +137,10 @@ li + li {
 
 .hero-band {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 360px);
-  gap: 24px;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+  gap: 16px;
   align-items: end;
-  margin-bottom: 22px;
+  margin-bottom: 16px;
 }
 
 .hero-copy,
@@ -157,22 +153,22 @@ li + li {
 .disclaimer-card,
 .diagnostic-drawer {
   border: 1px solid var(--line);
-  border-radius: 28px;
+  border-radius: 8px;
   background: var(--panel);
   box-shadow: var(--shadow);
   backdrop-filter: blur(10px);
 }
 
 .hero-copy {
-  padding: 30px 30px 24px;
+  padding: 24px;
 }
 
 .hero-note {
-  padding: 22px;
+  padding: 20px;
   align-self: stretch;
   display: grid;
   gap: 14px;
-  background: rgba(248, 244, 237, 0.88);
+  background: #f8fbfd;
 }
 
 .hero-kicker,
@@ -181,7 +177,7 @@ li + li {
   color: var(--teal);
   font-size: 0.82rem;
   font-weight: 800;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
@@ -215,12 +211,12 @@ li + li {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
-  gap: 20px;
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  gap: 16px;
 }
 
 .panel {
-  padding: 24px;
+  padding: 20px;
 }
 
 .intake-panel,
@@ -231,7 +227,7 @@ li + li {
 }
 
 .conversation-panel {
-  min-height: 820px;
+  min-height: 760px;
 }
 
 .panel-intro {
@@ -265,7 +261,7 @@ label {
 }
 
 .optional-details {
-  border-radius: 22px;
+  border-radius: 8px;
   border: 1px solid rgba(27, 36, 52, 0.09);
   background: rgba(255, 255, 255, 0.48);
   padding: 14px 16px 16px;
@@ -305,7 +301,7 @@ label {
 .tip-panel,
 .assistant-summary,
 .disclaimer-card {
-  padding: 18px 20px;
+  padding: 16px;
 }
 
 .session-panel {
@@ -357,26 +353,26 @@ label {
 }
 
 .empty-state {
-  padding: 24px;
+  padding: 18px;
   border: 1px dashed rgba(27, 36, 52, 0.18);
-  border-radius: 24px;
+  border-radius: 8px;
   background: rgba(255, 255, 255, 0.56);
 }
 
 .message-card {
   max-width: min(86%, 720px);
-  border-radius: 24px;
+  border-radius: 8px;
   padding: 16px 18px;
   border: 1px solid rgba(27, 36, 52, 0.08);
 }
 
 .message-card.user {
   margin-left: auto;
-  background: linear-gradient(135deg, rgba(214, 244, 237, 0.98), rgba(240, 249, 247, 0.98));
+  background: #e8f7f3;
 }
 
 .message-card.assistant {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(248, 244, 237, 0.96));
+  background: #f8fafc;
 }
 
 .message-card.follow_up {
@@ -406,8 +402,8 @@ label {
   display: grid;
   gap: 16px;
   padding: 22px;
-  border-radius: 24px;
-  background: linear-gradient(180deg, rgba(244, 250, 248, 0.98), rgba(252, 250, 246, 0.98));
+  border-radius: 8px;
+  background: #f3fbf8;
   border: 1px solid rgba(15, 118, 110, 0.12);
 }
 
@@ -429,11 +425,11 @@ label {
 }
 
 .result-card {
-  padding: 20px;
+  padding: 18px;
 }
 
 .result-card.focus {
-  background: linear-gradient(135deg, rgba(255, 247, 234, 0.98), rgba(255, 252, 246, 0.98));
+  background: #fff8eb;
 }
 
 .result-card p,
@@ -453,7 +449,7 @@ label {
 .emergency-banner {
   margin: 0;
   padding: 16px 18px;
-  border-radius: 20px;
+  border-radius: 8px;
   background: rgba(255, 232, 227, 0.96);
   color: var(--danger);
   font-weight: 800;
@@ -461,7 +457,7 @@ label {
 
 .diagnostic-drawer {
   margin-top: 8px;
-  padding: 18px 20px;
+  padding: 16px;
   background: rgba(245, 247, 251, 0.92);
 }
 
@@ -469,10 +465,6 @@ label {
   margin-top: 20px;
   padding-top: 20px;
   border-top: 1px solid rgba(27, 36, 52, 0.08);
-}
-
-.llm-block {
-  background: linear-gradient(180deg, rgba(246, 251, 255, 0.55), rgba(248, 250, 255, 0.2));
 }
 
 .debug-list {
@@ -508,6 +500,32 @@ label {
   flex: 1 1 320px;
 }
 
+.example-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.example-chip {
+  border: 1px solid rgba(15, 118, 110, 0.24);
+  background: #effaf7;
+  color: #0b5f59;
+  box-shadow: none;
+  padding: 8px 10px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.diagnostic-toggle-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.diagnostic-toggle {
+  padding: 9px 12px;
+  font-size: 0.9rem;
+}
+
 @media (max-width: 1040px) {
   .hero-band,
   .workspace {
@@ -533,7 +551,7 @@ label {
   .result-card,
   .disclaimer-card,
   .diagnostic-drawer {
-    border-radius: 22px;
+    border-radius: 8px;
   }
 
   .starter-grid,

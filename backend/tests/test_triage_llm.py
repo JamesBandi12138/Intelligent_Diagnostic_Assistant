@@ -6,11 +6,21 @@ from services.session_store import get_session
 from services.triage_graph.graph import run_triage
 
 
+LLM_EXTRACT_THROAT_LOCATION = '{"facts":{"location":"咽喉"},"missing_fields":["duration","severity","accompanying_symptoms","special_context"]}'
+LLM_EXTRACT_THROAT_COMPLETE = (
+    '{"facts":{"location":"咽喉","duration":"三天","severity":"4分",'
+    '"accompanying_symptoms":"吞咽时更明显，否认发烧咳嗽","special_context":"无慢性病"},'
+    '"missing_fields":[]}'
+)
+
+
 class _FakeChatCompletions:
     def __init__(self, responses: list[str]):
         self._responses = list(responses)
+        self.calls: list[dict] = []
 
     async def create(self, **kwargs):
+        self.calls.append(kwargs)
         content = self._responses.pop(0)
         return type(
             "Response",
@@ -25,7 +35,8 @@ class _FakeChatCompletions:
 
 class _FakeClient:
     def __init__(self, responses: list[str]):
-        self.chat = type("Chat", (), {"completions": _FakeChatCompletions(responses)})()
+        self.completions = _FakeChatCompletions(responses)
+        self.chat = type("Chat", (), {"completions": self.completions})()
 
 
 def test_follow_up_agent_prefers_llm_rewritten_question_and_records_trace():
@@ -40,7 +51,12 @@ def test_follow_up_agent_prefers_llm_rewritten_question_and_records_trace():
     response = asyncio.run(
         run_triage(
             request,
-            llm_client=_FakeClient(['{"question":"喉咙不舒服大概持续多久了，是突然开始还是慢慢加重的？"}']),
+            llm_client=_FakeClient(
+                [
+                    LLM_EXTRACT_THROAT_LOCATION,
+                    '{"question":"喉咙不舒服大概持续多久了，是突然开始还是慢慢加重的？"}',
+                ]
+            ),
         )
     )
 
@@ -54,7 +70,91 @@ def test_follow_up_agent_prefers_llm_rewritten_question_and_records_trace():
     assert session.to_payload()["llm_used"] is True
     assert session.to_payload()["raw_follow_up_question"]
     assert session.to_payload()["llm_follow_up_question"] == response.question
-    assert session.to_payload()["llm_trace"][0]["task"] == "rewrite_follow_up_question"
+    assert session.to_payload()["llm_trace"][1]["task"] == "rewrite_follow_up_question"
+
+
+def test_deepseek_json_calls_disable_thinking_and_request_json_output():
+    from common.config import settings
+
+    settings.LLM_PROVIDER = "deepseek"
+    session_id = f"llm-deepseek-options-{uuid4()}"
+    request = TriageRequest(
+        session_id=session_id,
+        patient=PatientProfile(age=29, sex="female"),
+        symptom_text="喉咙不舒服",
+        city="上海",
+    )
+    client = _FakeClient([LLM_EXTRACT_THROAT_LOCATION, '{"question":"喉咙不舒服持续多久了？"}'])
+
+    asyncio.run(run_triage(request, llm_client=client))
+
+    call = client.completions.calls[0]
+    assert call["response_format"] == {"type": "json_object"}
+    assert call["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+def test_symptom_intake_agent_uses_llm_structured_facts_before_follow_up_or_result():
+    session_id = f"llm-symptom-intake-{uuid4()}"
+    request = TriageRequest(
+        session_id=session_id,
+        patient=PatientProfile(age=31, sex="female"),
+        symptom_text="右眼发红发痒两天，有异物感，疼痛大概2分，没有视物模糊，也没有慢性病",
+        city="杭州",
+    )
+    client = _FakeClient(
+        [
+            (
+                '{"facts":{"location":"眼部","duration":"两天","severity":"2分",'
+                '"accompanying_symptoms":"发红、发痒、异物感，否认视物模糊",'
+                '"special_context":"无慢性病"},"missing_fields":[]}'
+            ),
+            '{"report_summary":"已整理眼部不适信息，建议先线下门诊评估。"}',
+        ]
+    )
+
+    response = asyncio.run(run_triage(request, llm_client=client))
+    session = get_session(session_id)
+
+    assert response.status == "completed"
+    assert response.recommended_departments[0].name == "眼科"
+    assert session is not None
+    assert session.extracted_facts["location"] == "眼部"
+    assert session.extracted_facts["duration"] == "两天"
+    assert session.extracted_facts["severity"] == "2分"
+    assert session.missing_fields == []
+    assert session.fact_confidence["location"] == "rule"
+    assert any(entry.task == "extract_structured_symptoms" and entry.used for entry in session.llm_trace)
+
+
+def test_symptom_intake_keeps_rule_facts_when_llm_conflicts_with_clear_text():
+    session_id = f"llm-symptom-conflict-{uuid4()}"
+    request = TriageRequest(
+        session_id=session_id,
+        patient=PatientProfile(age=31, sex="female"),
+        symptom_text="右眼发红发痒两天，有异物感，疼痛大概2分，没有视物模糊，也没有慢性病",
+        city="杭州",
+    )
+    client = _FakeClient(
+        [
+            (
+                '{"facts":{"location":"腹部","duration":"两天",'
+                '"accompanying_symptoms":"发红、发痒","special_context":"无慢性病"},'
+                '"missing_fields":["severity"]}'
+            ),
+            '{"report_summary":"已整理眼部不适信息，建议先眼科门诊评估。"}',
+        ]
+    )
+
+    response = asyncio.run(run_triage(request, llm_client=client))
+    session = get_session(session_id)
+
+    assert response.status == "completed"
+    assert response.recommended_departments[0].name == "眼科"
+    assert session is not None
+    assert session.extracted_facts["location"] == "眼部"
+    assert session.extracted_facts["severity"] == "2分"
+    assert session.fact_confidence["location"] == "rule"
+    assert session.fact_confidence["severity"] == "rule"
 
 
 def test_follow_up_agent_accepts_markdown_wrapped_json_from_llm():
@@ -70,7 +170,8 @@ def test_follow_up_agent_accepts_markdown_wrapped_json_from_llm():
         run_triage(
             request,
             llm_client=_FakeClient(
-                    [
+                [
+                    LLM_EXTRACT_THROAT_LOCATION,
                     '```json\n{"question":"鍠夊挋涓嶈垝鏈嶅ぇ姒傛寔缁涔呬簡锛屾槸绐佺劧寮€濮嬭繕鏄參鎱㈠姞閲嶇殑锛?"}\n```'
                 ]
             ),
@@ -151,7 +252,12 @@ def test_result_agent_prefers_llm_rewritten_summary_and_records_trace():
     asyncio.run(
         run_triage(
             initial_request,
-            llm_client=_FakeClient(['{"question":"这次喉咙不舒服已经持续多久了？吞咽时会更明显吗？"}']),
+            llm_client=_FakeClient(
+                [
+                    LLM_EXTRACT_THROAT_LOCATION,
+                    '{"question":"这次喉咙不舒服已经持续多久了？吞咽时会更明显吗？"}',
+                ]
+            ),
         )
     )
 
@@ -162,7 +268,12 @@ def test_result_agent_prefers_llm_rewritten_summary_and_records_trace():
     response = asyncio.run(
         run_triage(
             follow_up_request,
-            llm_client=_FakeClient(['{"report_summary":"根据你补充的情况，目前更建议优先到耳鼻喉科门诊评估喉咙不适。"}']),
+            llm_client=_FakeClient(
+                [
+                    LLM_EXTRACT_THROAT_COMPLETE,
+                    '{"report_summary":"根据你补充的情况，目前更建议优先到耳鼻喉科门诊评估喉咙不适。"}',
+                ]
+            ),
         )
     )
 
@@ -188,7 +299,12 @@ def test_result_agent_falls_back_to_rule_summary_when_llm_output_is_invalid():
     asyncio.run(
         run_triage(
             initial_request,
-            llm_client=_FakeClient(['{"question":"这次喉咙不舒服已经持续多久了？吞咽时会更明显吗？"}']),
+            llm_client=_FakeClient(
+                [
+                    LLM_EXTRACT_THROAT_LOCATION,
+                    '{"question":"这次喉咙不舒服已经持续多久了？吞咽时会更明显吗？"}',
+                ]
+            ),
         )
     )
 
@@ -196,7 +312,7 @@ def test_result_agent_falls_back_to_rule_summary_when_llm_output_is_invalid():
         session_id=session_id,
         answer="喉咙痛三天，吞咽时更明显，疼痛大约4分，没有发烧咳嗽，也没有慢性病",
     )
-    response = asyncio.run(run_triage(follow_up_request, llm_client=_FakeClient(['{}'])))
+    response = asyncio.run(run_triage(follow_up_request, llm_client=_FakeClient([LLM_EXTRACT_THROAT_COMPLETE, '{}'])))
     session = get_session(session_id)
 
     assert response.status == "completed"

@@ -123,6 +123,11 @@ describe('Triage view', () => {
       agent_trace: [{ agent: 'result_agent', summary: 'status=completed risk=medium' }],
       route_reason: 'all core fields are ready for final triage result',
       knowledge_summary: 'No knowledge hits retrieved for the current triage turn.',
+      raw_report_summary: '主诉：喉咙不舒服。目前信息补全后，建议优先咨询耳鼻喉科。',
+      llm_report_summary: '根据你补充的情况，目前更建议优先到耳鼻喉科门诊评估喉咙不适。',
+      llm_used: true,
+      llm_error: null,
+      llm_trace: [{ agent: 'result_agent', task: 'rewrite_report_summary', used: true, fallback: false, error: null }],
     });
 
     const wrapper = mountView();
@@ -150,6 +155,11 @@ describe('Triage view', () => {
         agent_trace: [{ agent: 'result_agent', summary: 'status=completed risk=medium' }],
         route_reason: 'all core fields are ready for final triage result',
         knowledge_summary: 'No knowledge hits retrieved for the current triage turn.',
+        raw_report_summary: '主诉：喉咙不舒服。目前信息补全后，建议优先咨询耳鼻喉科。',
+        llm_report_summary: '根据你补充的情况，目前更建议优先到耳鼻喉科门诊评估喉咙不适。',
+        llm_used: true,
+        llm_error: null,
+        llm_trace: [{ agent: 'result_agent', task: 'rewrite_report_summary', used: true, fallback: false, error: null }],
       })
       .mockResolvedValueOnce({
         session_id: 'session-1',
@@ -164,6 +174,11 @@ describe('Triage view', () => {
         agent_trace: [{ agent: 'result_agent', summary: 'status=completed risk=medium' }],
         route_reason: 'all core fields are ready for final triage result',
         knowledge_summary: 'No knowledge hits retrieved for the current triage turn.',
+        raw_report_summary: '主诉：喉咙不舒服。目前信息补全后，建议优先咨询耳鼻喉科。',
+        llm_report_summary: '根据你补充的情况，目前更建议优先到耳鼻喉科门诊评估喉咙不适。',
+        llm_used: true,
+        llm_error: null,
+        llm_trace: [{ agent: 'result_agent', task: 'rewrite_report_summary', used: true, fallback: false, error: null }],
       });
     createTriageReport.mockResolvedValue(report);
     getTriageReport.mockResolvedValue(report);
@@ -213,6 +228,11 @@ describe('Triage view', () => {
       ],
       route_reason: 'missing core fields require one follow-up question',
       knowledge_summary: 'No knowledge hits retrieved for the current triage turn.',
+      raw_follow_up_question: '这种不舒服持续多久了？',
+      llm_follow_up_question: '这种不舒服大概持续多久了，是突然开始还是慢慢加重的？',
+      llm_used: true,
+      llm_error: null,
+      llm_trace: [{ agent: 'follow_up_agent', task: 'rewrite_follow_up_question', used: true, fallback: false, error: null }],
     });
 
     const wrapper = mountView();
@@ -223,5 +243,43 @@ describe('Triage view', () => {
     expect(wrapper.text()).toContain('follow_up_agent');
     expect(wrapper.text()).toContain('knowledge_agent');
     expect(wrapper.text()).toContain('No knowledge hits retrieved for the current triage turn.');
+    expect(wrapper.text()).toContain('raw_follow_up_question');
+    expect(wrapper.text()).toContain('llm_follow_up_question');
+    expect(wrapper.text()).toContain('rewrite_follow_up_question');
+    expect(wrapper.text()).toContain('llm_used: true');
+  });
+
+  it('shows llm summary trace after loading a completed session', async () => {
+    createTriageSession.mockResolvedValue({ session_id: 'session-1', status: 'created' });
+    analyzeTriage.mockResolvedValue(completedResult);
+    getTriageSession.mockResolvedValue({
+      session_id: 'session-1',
+      status: 'completed',
+      latest_request: null,
+      latest_result: completedResult,
+      current_question: null,
+      report_id: null,
+      messages: [],
+      current_agent: 'result_agent',
+      node_trace: ['bootstrap_context', 'supervisor_route', 'safety_agent', 'triage_agent', 'result_agent'],
+      agent_trace: [{ agent: 'result_agent', summary: 'status=completed risk=medium' }],
+      route_reason: 'all core fields are ready for final triage result',
+      knowledge_summary: 'No knowledge hits retrieved for the current triage turn.',
+      raw_report_summary: '主诉：喉咙不舒服。目前信息补全后，建议优先咨询耳鼻喉科。',
+      llm_report_summary: '根据你补充的情况，目前更建议优先到耳鼻喉科门诊评估喉咙不适。',
+      llm_used: true,
+      llm_error: null,
+      llm_trace: [{ agent: 'result_agent', task: 'rewrite_report_summary', used: true, fallback: false, error: null }],
+    });
+
+    const wrapper = mountView();
+
+    await clickButtonByText(wrapper, '开始导诊');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('raw_report_summary');
+    expect(wrapper.text()).toContain('llm_report_summary');
+    expect(wrapper.text()).toContain('rewrite_report_summary');
+    expect(wrapper.text()).toContain('llm_used: true');
   });
 });

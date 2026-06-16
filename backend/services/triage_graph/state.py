@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-from app.schemas.triage import AnalyzeResponse, PatientProfile, TriageMessage, TriageRequest
+from app.schemas.triage import AnalyzeResponse, LlmTraceEntry, PatientProfile, TriageMessage, TriageRequest
 
 
 class TriageGraphState(TypedDict, total=False):
+    llm_client: Any
     request: TriageRequest
     response: AnalyzeResponse
     session_id: str
@@ -39,3 +40,10 @@ class TriageGraphState(TypedDict, total=False):
     safety_checked: bool
     facts_updated: bool
     knowledge_checked: bool
+    raw_follow_up_question: str | None
+    llm_follow_up_question: str | None
+    raw_report_summary: str | None
+    llm_report_summary: str | None
+    llm_used: bool
+    llm_error: str | None
+    llm_trace: list[LlmTraceEntry]

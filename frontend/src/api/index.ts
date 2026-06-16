@@ -69,6 +69,14 @@ export interface AgentTraceEntry {
   summary: string;
 }
 
+export interface LlmTraceEntry {
+  agent: string;
+  task: string;
+  used: boolean;
+  fallback: boolean;
+  error?: string | null;
+}
+
 export interface TriageSessionDetailResponse {
   session_id: string;
   status: string;
@@ -82,6 +90,13 @@ export interface TriageSessionDetailResponse {
   agent_trace?: AgentTraceEntry[];
   route_reason?: string | null;
   knowledge_summary?: string | null;
+  raw_follow_up_question?: string | null;
+  llm_follow_up_question?: string | null;
+  raw_report_summary?: string | null;
+  llm_report_summary?: string | null;
+  llm_used?: boolean;
+  llm_error?: string | null;
+  llm_trace?: LlmTraceEntry[];
 }
 
 export interface TriageSessionResponse {

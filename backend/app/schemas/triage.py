@@ -65,6 +65,14 @@ class TriageMessage(BaseModel):
     kind: str = "text"
 
 
+class LlmTraceEntry(BaseModel):
+    agent: str
+    task: str
+    used: bool
+    fallback: bool
+    error: str | None = None
+
+
 class FollowUpResponse(BaseModel):
     session_id: str
     status: TriageStatus = TriageStatus.NEEDS_FOLLOW_UP
@@ -111,3 +119,10 @@ class TriageSessionDetailResponse(BaseModel):
     agent_trace: list[dict[str, str]] = Field(default_factory=list)
     route_reason: str | None = None
     knowledge_summary: str | None = None
+    raw_follow_up_question: str | None = None
+    llm_follow_up_question: str | None = None
+    raw_report_summary: str | None = None
+    llm_report_summary: str | None = None
+    llm_used: bool = False
+    llm_error: str | None = None
+    llm_trace: list[LlmTraceEntry] = Field(default_factory=list)

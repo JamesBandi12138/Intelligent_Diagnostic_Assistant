@@ -7,7 +7,7 @@ from typing import Any
 
 from redis import Redis
 
-from app.schemas.triage import AnalyzeResponse, PatientProfile, TriageMessage, TriageRequest
+from app.schemas.triage import AnalyzeResponse, LlmTraceEntry, PatientProfile, TriageMessage, TriageRequest
 from common.config import settings
 
 
@@ -34,6 +34,13 @@ class SessionRecord:
     agent_trace: list[dict[str, str]] = field(default_factory=list)
     route_reason: str | None = None
     knowledge_summary: str | None = None
+    raw_follow_up_question: str | None = None
+    llm_follow_up_question: str | None = None
+    raw_report_summary: str | None = None
+    llm_report_summary: str | None = None
+    llm_used: bool = False
+    llm_error: str | None = None
+    llm_trace: list[LlmTraceEntry] = field(default_factory=list)
 
     def to_payload(self) -> dict:
         return {
@@ -58,6 +65,13 @@ class SessionRecord:
             "agent_trace": self.agent_trace,
             "route_reason": self.route_reason,
             "knowledge_summary": self.knowledge_summary,
+            "raw_follow_up_question": self.raw_follow_up_question,
+            "llm_follow_up_question": self.llm_follow_up_question,
+            "raw_report_summary": self.raw_report_summary,
+            "llm_report_summary": self.llm_report_summary,
+            "llm_used": self.llm_used,
+            "llm_error": self.llm_error,
+            "llm_trace": [entry.model_dump(mode="json") for entry in self.llm_trace],
         }
 
     @classmethod
@@ -87,6 +101,13 @@ class SessionRecord:
             agent_trace=payload.get("agent_trace", []),
             route_reason=payload.get("route_reason"),
             knowledge_summary=payload.get("knowledge_summary"),
+            raw_follow_up_question=payload.get("raw_follow_up_question"),
+            llm_follow_up_question=payload.get("llm_follow_up_question"),
+            raw_report_summary=payload.get("raw_report_summary"),
+            llm_report_summary=payload.get("llm_report_summary"),
+            llm_used=payload.get("llm_used", False),
+            llm_error=payload.get("llm_error"),
+            llm_trace=[LlmTraceEntry.model_validate(item) for item in payload.get("llm_trace", [])],
         )
 
 

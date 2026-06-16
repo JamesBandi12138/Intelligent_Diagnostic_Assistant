@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from functools import lru_cache
 from uuid import uuid4
@@ -11,6 +12,7 @@ from app.schemas.triage import (
     AnalyzeResponse,
     DepartmentRecommendation,
     FollowUpResponse,
+    LlmTraceEntry,
     PatientProfile,
     RiskLevel,
     TriageMessage,
@@ -21,7 +23,7 @@ from app.schemas.triage import (
 from common.config import settings
 from services.knowledge_base.milvus_store import knowledge_store
 from services.safety_guardrails.service import detect_risk
-from services.session_store import SessionRecord, create_session, get_session, save_session
+from services.session_store import create_session, get_session, save_session
 from services.triage_graph.state import TriageGraphState
 
 
@@ -47,13 +49,14 @@ FOLLOW_UP_QUESTIONS = {
 async def run_triage(request: TriageRequest, llm_client=None) -> AnalyzeResponse:
     initial_state: TriageGraphState = {
         "request": request,
+        "llm_client": llm_client,
         "iteration_count": 0,
     }
-    final_state = _compiled_graph().invoke(initial_state)
+    final_state = await _compiled_graph().ainvoke(initial_state)
     return final_state["response"]
 
 
-def _load_or_create_record(request: TriageRequest) -> SessionRecord:
+def _load_or_create_record(request: TriageRequest):
     if request.session_id:
         session = get_session(request.session_id)
         if session is not None:
@@ -98,7 +101,9 @@ def _special_context_flags(patient: PatientProfile | None, text: str) -> dict[st
         "pregnancy": bool(patient and patient.pregnancy_status) or ("怀孕" in text),
         "elderly": bool(patient and patient.age >= 65),
         "child": bool(patient and patient.age <= 6),
-        "chronic_disease": bool(patient and patient.medical_history) or any(token in text for token in ("高血压", "糖尿病", "慢性病")),
+        "chronic_disease": bool(patient and patient.medical_history) or any(
+            token in text for token in ("高血压", "糖尿病", "慢性病")
+        ),
         "post_surgery": "术后" in text,
     }
 
@@ -218,6 +223,111 @@ def _recommend_department(symptom_text: str) -> DepartmentRecommendation:
     )
 
 
+def _classify_llm_error(error: Exception) -> str:
+    message = str(error).lower()
+    if any(token in message for token in ("timeout", "network", "auth", "unavailable")):
+        return "transport_error"
+    return "format_error"
+
+
+def _build_llm_trace(
+    *,
+    agent: str,
+    task: str,
+    used: bool,
+    fallback: bool,
+    error: str | None,
+    existing: list[LlmTraceEntry] | None = None,
+) -> list[LlmTraceEntry]:
+    trace = list(existing or [])
+    trace.append(LlmTraceEntry(agent=agent, task=task, used=used, fallback=fallback, error=error))
+    return trace
+
+
+async def _call_llm_json(llm_client, prompt: str, max_tokens: int = 240) -> dict:
+    response = await llm_client.chat.completions.create(
+        model=settings.LLM_MODEL,
+        temperature=settings.LLM_TEMPERATURE,
+        max_tokens=max_tokens,
+        messages=[
+            {"role": "system", "content": "You are a careful Chinese triage writing assistant."},
+            {"role": "user", "content": prompt},
+        ],
+    )
+    return json.loads(response.choices[0].message.content)
+
+
+async def _rewrite_follow_up_question_with_llm(
+    *,
+    llm_client,
+    raw_question: str,
+    known_facts_summary: str,
+    missing_field: str,
+) -> tuple[str | None, str | None]:
+    if llm_client is None:
+        return None, None
+
+    prompt = (
+        "Rewrite one Chinese triage follow-up question.\n"
+        "Keep exactly one question.\n"
+        "Do not change the target field.\n"
+        "Be concise and natural.\n"
+        f"missing_field: {missing_field}\n"
+        f"known_facts_summary: {known_facts_summary}\n"
+        f"raw_question: {raw_question}\n"
+        'Return JSON only like {"question":"..."}'
+    )
+    try:
+        payload = await _call_llm_json(llm_client, prompt, max_tokens=180)
+        question = payload.get("question")
+        if not isinstance(question, str) or not question.strip():
+            return None, "format_error"
+        stripped = question.strip()
+        if stripped.count("？") + stripped.count("?") > 1:
+            return None, "safety_reject"
+        return stripped, None
+    except json.JSONDecodeError:
+        return None, "format_error"
+    except Exception as error:
+        return None, _classify_llm_error(error)
+
+
+async def _rewrite_report_summary_with_llm(
+    *,
+    llm_client,
+    raw_summary: str,
+    symptom_text: str,
+    risk_level: str,
+    department_name: str,
+    care_path: str,
+) -> tuple[str | None, str | None]:
+    if llm_client is None:
+        return None, None
+
+    prompt = (
+        "Rewrite one Chinese triage summary for a patient.\n"
+        "Do not change risk level or department.\n"
+        "Do not add new facts.\n"
+        "Be natural and concise.\n"
+        f"symptom_text: {symptom_text}\n"
+        f"risk_level: {risk_level}\n"
+        f"department: {department_name}\n"
+        f"care_path: {care_path}\n"
+        f"raw_summary: {raw_summary}\n"
+        'Return JSON only like {"report_summary":"..."}'
+    )
+    try:
+        payload = await _call_llm_json(llm_client, prompt, max_tokens=220)
+        summary = payload.get("report_summary")
+        if not isinstance(summary, str) or not summary.strip():
+            return None, "format_error"
+        return summary.strip(), None
+    except json.JSONDecodeError:
+        return None, "format_error"
+    except Exception as error:
+        return None, _classify_llm_error(error)
+
+
 def _bootstrap_context(state: TriageGraphState) -> TriageGraphState:
     request = state["request"]
     record = _load_or_create_record(request)
@@ -232,6 +342,7 @@ def _bootstrap_context(state: TriageGraphState) -> TriageGraphState:
         messages = _append_message(messages, "user", request.answer, kind="answer")
 
     return {
+        "llm_client": state.get("llm_client"),
         "session_id": record.session_id,
         "patient": request.patient or record.patient,
         "city": request.city or record.city,
@@ -263,6 +374,13 @@ def _bootstrap_context(state: TriageGraphState) -> TriageGraphState:
         "safety_checked": False,
         "facts_updated": False,
         "knowledge_checked": False,
+        "raw_follow_up_question": record.raw_follow_up_question,
+        "llm_follow_up_question": record.llm_follow_up_question,
+        "raw_report_summary": record.raw_report_summary,
+        "llm_report_summary": record.llm_report_summary,
+        "llm_used": record.llm_used,
+        "llm_error": record.llm_error,
+        "llm_trace": list(record.llm_trace),
     }
 
 
@@ -275,42 +393,36 @@ def _supervisor_route(state: TriageGraphState) -> TriageGraphState:
             "next_agent": "persist_state",
             "route_reason": "workflow already completed",
         }
-
     if not state.get("safety_checked"):
         return {
             "node_trace": node_trace,
             "next_agent": "safety_agent",
             "route_reason": "run safety check before any other agent",
         }
-
     if state.get("safety_decision") == "escalate_emergency":
         return {
             "node_trace": node_trace,
             "next_agent": "result_agent",
             "route_reason": "emergency risk detected by safety agent",
         }
-
     if not state.get("facts_updated"):
         return {
             "node_trace": node_trace,
             "next_agent": "triage_agent",
             "route_reason": "structured facts need to be updated",
         }
-
     if not state.get("knowledge_checked"):
         return {
             "node_trace": node_trace,
             "next_agent": "knowledge_agent",
             "route_reason": "knowledge agent should enrich the current triage context",
         }
-
     if state.get("missing_fields"):
         return {
             "node_trace": node_trace,
             "next_agent": "follow_up_agent",
             "route_reason": "missing core fields require one follow-up question",
         }
-
     return {
         "node_trace": node_trace,
         "next_agent": "result_agent",
@@ -328,7 +440,6 @@ def _safety_agent(state: TriageGraphState) -> TriageGraphState:
     risk_level, emergency_advice = detect_risk(combined_text)
     safety_decision = "escalate_emergency" if risk_level == RiskLevel.EMERGENCY else "continue"
     risk_reasons = ["emergency keywords detected"] if safety_decision == "escalate_emergency" else ["no emergency escalation"]
-
     return {
         "node_trace": node_trace,
         "agent_trace": _trace_agent(state, "safety_agent", f"risk={risk_level} decision={safety_decision}"),
@@ -351,7 +462,6 @@ def _triage_agent(state: TriageGraphState) -> TriageGraphState:
     )
     facts, confidence, flags = _extract_facts(combined_text, state.get("patient"))
     missing_fields = _missing_fields(facts)
-
     return {
         "node_trace": node_trace,
         "agent_trace": _trace_agent(state, "triage_agent", f"facts={len(facts)} missing={len(missing_fields)}"),
@@ -374,11 +484,7 @@ def _knowledge_agent(state: TriageGraphState) -> TriageGraphState:
     )
     hits = knowledge_store.search(query, top_k=3)
     serialized_hits = [{"title": hit.title, "content": hit.content, "score": str(hit.score)} for hit in hits]
-    if hits:
-        summary = "；".join(hit.title for hit in hits)
-    else:
-        summary = "No knowledge hits retrieved for the current triage turn."
-
+    summary = "；".join(hit.title for hit in hits) if hits else "No knowledge hits retrieved for the current triage turn."
     return {
         "node_trace": node_trace,
         "agent_trace": _trace_agent(state, "knowledge_agent", f"hits={len(hits)}"),
@@ -391,11 +497,27 @@ def _knowledge_agent(state: TriageGraphState) -> TriageGraphState:
     }
 
 
-def _follow_up_agent(state: TriageGraphState) -> TriageGraphState:
+async def _follow_up_agent(state: TriageGraphState) -> TriageGraphState:
     node_trace = _trace_node(state, "follow_up_agent")
     question_key = state["missing_fields"][0]
-    question = FOLLOW_UP_QUESTIONS[question_key]
+    raw_question = FOLLOW_UP_QUESTIONS[question_key]
     known_facts_summary = _build_known_facts_summary(state.get("extracted_facts", {}))
+    llm_question, llm_error = await _rewrite_follow_up_question_with_llm(
+        llm_client=state.get("llm_client"),
+        raw_question=raw_question,
+        known_facts_summary=known_facts_summary,
+        missing_field=question_key,
+    )
+    question = llm_question or raw_question
+    llm_used = llm_question is not None
+    llm_trace = _build_llm_trace(
+        agent="follow_up_agent",
+        task="rewrite_follow_up_question",
+        used=llm_used,
+        fallback=not llm_used,
+        error=llm_error,
+        existing=state.get("llm_trace"),
+    )
 
     response = FollowUpResponse(
         session_id=state["session_id"],
@@ -407,7 +529,6 @@ def _follow_up_agent(state: TriageGraphState) -> TriageGraphState:
     )
 
     messages = _append_message(state.get("conversation_messages", []), "assistant", question, kind="follow_up")
-
     return {
         "node_trace": node_trace,
         "agent_trace": _trace_agent(state, "follow_up_agent", f"question={question_key}"),
@@ -417,10 +538,15 @@ def _follow_up_agent(state: TriageGraphState) -> TriageGraphState:
         "workflow_status": "awaiting_follow_up",
         "conversation_messages": messages,
         "response": response,
+        "raw_follow_up_question": raw_question,
+        "llm_follow_up_question": llm_question,
+        "llm_used": llm_used,
+        "llm_error": llm_error,
+        "llm_trace": llm_trace,
     }
 
 
-def _result_agent(state: TriageGraphState) -> TriageGraphState:
+async def _result_agent(state: TriageGraphState) -> TriageGraphState:
     node_trace = _trace_node(state, "result_agent")
     combined_text = _combined_text_from_parts(
         state.get("symptom_text"),
@@ -429,6 +555,7 @@ def _result_agent(state: TriageGraphState) -> TriageGraphState:
     )
 
     if state.get("safety_decision") == "escalate_emergency":
+        raw_summary = f"系统识别到急危重风险信号：{state.get('symptom_text') or combined_text}"
         response = TriageResponse(
             session_id=state["session_id"],
             status=TriageStatus.COMPLETED,
@@ -447,24 +574,47 @@ def _result_agent(state: TriageGraphState) -> TriageGraphState:
                 "携带既往病历和当前用药清单",
                 "记录症状开始时间和变化过程",
             ],
-            report_summary=f"系统识别到急危重风险信号：{state.get('symptom_text') or combined_text}",
+            report_summary=raw_summary,
             disclaimer=DISCLAIMER,
         )
+        llm_summary = None
+        llm_error = None
+        llm_used = False
+        llm_trace = list(state.get("llm_trace", []))
     else:
         department = _recommend_department(combined_text)
+        care_path = _build_care_path(RiskLevel(state["risk_level"]))
+        raw_summary = f"主诉：{state.get('symptom_text')}。当前补全信息后，建议优先咨询 {department.name}。"
+        llm_summary, llm_error = await _rewrite_report_summary_with_llm(
+            llm_client=state.get("llm_client"),
+            raw_summary=raw_summary,
+            symptom_text=state.get("symptom_text", ""),
+            risk_level=state["risk_level"],
+            department_name=department.name,
+            care_path=care_path,
+        )
+        llm_used = llm_summary is not None
+        llm_trace = _build_llm_trace(
+            agent="result_agent",
+            task="rewrite_report_summary",
+            used=llm_used,
+            fallback=not llm_used,
+            error=llm_error,
+            existing=state.get("llm_trace"),
+        )
         response = TriageResponse(
             session_id=state["session_id"],
             status=TriageStatus.COMPLETED,
             risk_level=RiskLevel(state["risk_level"]),
             emergency_advice=None,
             recommended_departments=[department],
-            care_path=_build_care_path(RiskLevel(state["risk_level"])),
+            care_path=care_path,
             preparation_checklist=[
                 "记录症状开始时间、变化过程和诱因",
                 "携带既往病历、检查报告和当前用药清单",
                 "说明药物过敏史、基础病和近期就诊情况",
             ],
-            report_summary=f"主诉：{state.get('symptom_text')}。当前补全信息后，建议优先咨询 {department.name}。",
+            report_summary=llm_summary or raw_summary,
             disclaimer=DISCLAIMER,
         )
 
@@ -483,6 +633,11 @@ def _result_agent(state: TriageGraphState) -> TriageGraphState:
         "completed": True,
         "conversation_messages": messages,
         "response": response,
+        "raw_report_summary": raw_summary,
+        "llm_report_summary": llm_summary,
+        "llm_used": llm_used,
+        "llm_error": llm_error,
+        "llm_trace": llm_trace,
     }
 
 
@@ -510,6 +665,13 @@ def _persist_state(state: TriageGraphState) -> TriageGraphState:
     record.agent_trace = list(state.get("agent_trace", []))
     record.route_reason = state.get("route_reason")
     record.knowledge_summary = state.get("knowledge_summary")
+    record.raw_follow_up_question = state.get("raw_follow_up_question")
+    record.llm_follow_up_question = state.get("llm_follow_up_question")
+    record.raw_report_summary = state.get("raw_report_summary")
+    record.llm_report_summary = state.get("llm_report_summary")
+    record.llm_used = state.get("llm_used", False)
+    record.llm_error = state.get("llm_error")
+    record.llm_trace = list(state.get("llm_trace", []))
 
     if state["response"].status == TriageStatus.COMPLETED:
         record.status = TriageStatus.COMPLETED
@@ -520,7 +682,6 @@ def _persist_state(state: TriageGraphState) -> TriageGraphState:
         record.final_result = None
 
     save_session(record)
-
     return {
         "node_trace": node_trace,
         "debug_snapshot": {
@@ -529,6 +690,13 @@ def _persist_state(state: TriageGraphState) -> TriageGraphState:
             "agent_trace": state.get("agent_trace", []),
             "route_reason": state.get("route_reason"),
             "knowledge_summary": state.get("knowledge_summary"),
+            "raw_follow_up_question": state.get("raw_follow_up_question"),
+            "llm_follow_up_question": state.get("llm_follow_up_question"),
+            "raw_report_summary": state.get("raw_report_summary"),
+            "llm_report_summary": state.get("llm_report_summary"),
+            "llm_used": state.get("llm_used", False),
+            "llm_error": state.get("llm_error"),
+            "llm_trace": [entry.model_dump(mode="json") for entry in state.get("llm_trace", [])],
         },
     }
 
@@ -569,5 +737,4 @@ def _compiled_graph():
     workflow.add_edge("follow_up_agent", "persist_state")
     workflow.add_edge("result_agent", "persist_state")
     workflow.add_edge("persist_state", END)
-
     return workflow.compile()

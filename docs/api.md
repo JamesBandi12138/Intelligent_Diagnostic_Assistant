@@ -198,6 +198,40 @@ Base URL: `http://localhost:8000`
 
 这些字段用于调试和可视化，不影响原有导诊主结果结构。
 
+LLM 润色与回退相关的调试字段也会在 `GET /api/triage/sessions/{session_id}` 中返回：
+
+```json
+{
+  "raw_follow_up_question": "这种不舒服持续多久了？",
+  "llm_follow_up_question": "这种不舒服大概持续多久了，是突然开始还是慢慢加重的？",
+  "raw_report_summary": "主诉：喉咙不舒服。目前信息补全后，建议优先咨询耳鼻喉科。",
+  "llm_report_summary": "根据你补充的情况，目前更建议优先到耳鼻喉科门诊评估喉咙不适。",
+  "llm_used": true,
+  "llm_error": null,
+  "llm_trace": [
+    {
+      "agent": "follow_up_agent",
+      "task": "rewrite_follow_up_question",
+      "used": true,
+      "fallback": false,
+      "error": null
+    },
+    {
+      "agent": "result_agent",
+      "task": "rewrite_report_summary",
+      "used": true,
+      "fallback": false,
+      "error": null
+    }
+  ]
+}
+```
+
+- `raw_follow_up_question` / `raw_report_summary` 是规则层生成的原始文本。
+- `llm_follow_up_question` / `llm_report_summary` 是 LLM 润色后的最终文本。
+- `llm_used=false` 表示本轮回落到了规则结果，`llm_error` 用于区分 `transport_error`、`format_error` 或 `safety_reject`。
+- `llm_trace` 用于查看每个 agent 的 LLM 调用参与情况。
+
 ## `POST /api/reports`
 
 ### 请求示例

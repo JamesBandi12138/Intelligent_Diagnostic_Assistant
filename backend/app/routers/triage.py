@@ -50,4 +50,11 @@ async def get_session_detail(session_id: str) -> TriageSessionDetailResponse:
         agent_trace=session.agent_trace,
         route_reason=session.route_reason,
         knowledge_summary=session.knowledge_summary,
+        raw_follow_up_question=session.raw_follow_up_question,
+        llm_follow_up_question=session.llm_follow_up_question,
+        raw_report_summary=session.raw_report_summary,
+        llm_report_summary=session.llm_report_summary,
+        llm_used=session.llm_used,
+        llm_error=session.llm_error,
+        llm_trace=session.llm_trace,
     )

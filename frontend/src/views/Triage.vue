@@ -82,7 +82,7 @@
             <p class="subtle">当前报告：{{ activeReportId || '尚未生成' }}</p>
           </div>
           <section
-            v-if="currentAgent || nodeTrace.length || agentTrace.length || routeReason || knowledgeSummary"
+            v-if="showDebugPanel"
             class="result-card debug-card"
           >
             <h3>编排调试</h3>
@@ -90,9 +90,20 @@
             <p v-if="routeReason"><strong>route_reason:</strong> {{ routeReason }}</p>
             <p v-if="knowledgeSummary"><strong>knowledge_summary:</strong> {{ knowledgeSummary }}</p>
             <p v-if="nodeTrace.length"><strong>node_trace:</strong> {{ nodeTrace.join(' -> ') }}</p>
+            <p v-if="llmUsed !== null"><strong>llm_used:</strong> {{ llmUsed }}</p>
+            <p v-if="llmError"><strong>llm_error:</strong> {{ llmError }}</p>
+            <p v-if="rawFollowUpQuestion"><strong>raw_follow_up_question:</strong> {{ rawFollowUpQuestion }}</p>
+            <p v-if="llmFollowUpQuestion"><strong>llm_follow_up_question:</strong> {{ llmFollowUpQuestion }}</p>
+            <p v-if="rawReportSummary"><strong>raw_report_summary:</strong> {{ rawReportSummary }}</p>
+            <p v-if="llmReportSummary"><strong>llm_report_summary:</strong> {{ llmReportSummary }}</p>
             <ul v-if="agentTrace.length" class="debug-list">
               <li v-for="(item, index) in agentTrace" :key="`${item.agent}-${index}`">
                 {{ item.agent }} | {{ item.summary }}
+              </li>
+            </ul>
+            <ul v-if="llmTrace.length" class="debug-list">
+              <li v-for="(item, index) in llmTrace" :key="`${item.agent}-${item.task}-${index}`">
+                {{ item.agent }} | {{ item.task }} | used={{ item.used }} | fallback={{ item.fallback }}<span v-if="item.error"> | error={{ item.error }}</span>
               </li>
             </ul>
           </section>
@@ -304,6 +315,7 @@ import {
   getTriageSession,
   type AnalyzeTriageResponse,
   type CompletedTriageResponse,
+  type LlmTraceEntry,
   type ReportResponse,
   type RiskLevel,
   type Sex,
@@ -346,6 +358,13 @@ const nodeTrace = ref<string[]>([]);
 const agentTrace = ref<AgentTraceEntry[]>([]);
 const routeReason = ref('');
 const knowledgeSummary = ref('');
+const rawFollowUpQuestion = ref('');
+const llmFollowUpQuestion = ref('');
+const rawReportSummary = ref('');
+const llmReportSummary = ref('');
+const llmUsed = ref<boolean | null>(null);
+const llmError = ref('');
+const llmTrace = ref<LlmTraceEntry[]>([]);
 
 const submitting = ref(false);
 const loadingSession = ref(false);
@@ -356,6 +375,21 @@ const reportError = ref('');
 
 const hasActiveConversation = computed(() => Boolean(activeSessionId.value) && sessionStatus.value !== 'completed');
 const currentRiskLevel = computed<RiskLevel | ''>(() => latestResponse.value?.risk_level ?? '');
+const showDebugPanel = computed(
+  () =>
+    Boolean(currentAgent.value) ||
+    nodeTrace.value.length > 0 ||
+    agentTrace.value.length > 0 ||
+    Boolean(routeReason.value) ||
+    Boolean(knowledgeSummary.value) ||
+    llmUsed.value !== null ||
+    Boolean(llmError.value) ||
+    Boolean(rawFollowUpQuestion.value) ||
+    Boolean(llmFollowUpQuestion.value) ||
+    Boolean(rawReportSummary.value) ||
+    Boolean(llmReportSummary.value) ||
+    llmTrace.value.length > 0,
+);
 const departmentSummary = computed(() => {
   if (!report.value) {
     return '';
@@ -421,6 +455,13 @@ async function applySessionState(session: TriageSessionDetailResponse) {
   agentTrace.value = session.agent_trace || [];
   routeReason.value = session.route_reason || '';
   knowledgeSummary.value = session.knowledge_summary || '';
+  rawFollowUpQuestion.value = session.raw_follow_up_question || '';
+  llmFollowUpQuestion.value = session.llm_follow_up_question || '';
+  rawReportSummary.value = session.raw_report_summary || '';
+  llmReportSummary.value = session.llm_report_summary || '';
+  llmUsed.value = typeof session.llm_used === 'boolean' ? session.llm_used : null;
+  llmError.value = session.llm_error || '';
+  llmTrace.value = session.llm_trace || [];
 
   if (session.latest_result?.status === 'needs_follow_up') {
     followUpSummary.value = session.latest_result.known_facts_summary;
@@ -560,6 +601,13 @@ function resetConversation() {
   agentTrace.value = [];
   routeReason.value = '';
   knowledgeSummary.value = '';
+  rawFollowUpQuestion.value = '';
+  llmFollowUpQuestion.value = '';
+  rawReportSummary.value = '';
+  llmReportSummary.value = '';
+  llmUsed.value = null;
+  llmError.value = '';
+  llmTrace.value = [];
   answerText.value = '';
   lookupSessionId.value = '';
   errorMessage.value = '';

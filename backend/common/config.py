@@ -14,9 +14,19 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "qwen-plus"
     LLM_TEMPERATURE: float = 0.2
     LLM_MAX_TOKENS: int = 2048
+    ENABLE_LLM_TRIAGE: bool = False
 
     ENABLE_TAVILY_SEARCH: bool = False
     TAVILY_API_KEY: str = ""
+
+    REDIS_URL: str = "redis://localhost:6380/0"
+    REDIS_PREFIX: str = "ida"
+    SESSION_TTL_SECONDS: int = 60 * 60 * 24 * 7
+
+    MILVUS_ENABLED: bool = False
+    MILVUS_URI: str = "http://localhost:19530"
+    MILVUS_TOKEN: str = ""
+    MILVUS_COLLECTION: str = "ida_knowledge"
 
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"),
@@ -26,4 +36,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-

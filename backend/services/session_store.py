@@ -28,6 +28,12 @@ class SessionRecord:
     final_result: dict[str, Any] | None = None
     report_id: str | None = None
     messages: list[TriageMessage] = field(default_factory=list)
+    workflow_status: str = "created"
+    current_agent: str | None = None
+    node_trace: list[str] = field(default_factory=list)
+    agent_trace: list[dict[str, str]] = field(default_factory=list)
+    route_reason: str | None = None
+    knowledge_summary: str | None = None
 
     def to_payload(self) -> dict:
         return {
@@ -46,6 +52,12 @@ class SessionRecord:
             "final_result": self.final_result,
             "report_id": self.report_id,
             "messages": [message.model_dump(mode="json") for message in self.messages],
+            "workflow_status": self.workflow_status,
+            "current_agent": self.current_agent,
+            "node_trace": self.node_trace,
+            "agent_trace": self.agent_trace,
+            "route_reason": self.route_reason,
+            "knowledge_summary": self.knowledge_summary,
         }
 
     @classmethod
@@ -69,6 +81,12 @@ class SessionRecord:
             final_result=payload.get("final_result"),
             report_id=payload.get("report_id"),
             messages=[TriageMessage.model_validate(item) for item in payload.get("messages", [])],
+            workflow_status=payload.get("workflow_status", payload.get("status", "created")),
+            current_agent=payload.get("current_agent"),
+            node_trace=payload.get("node_trace", []),
+            agent_trace=payload.get("agent_trace", []),
+            route_reason=payload.get("route_reason"),
+            knowledge_summary=payload.get("knowledge_summary"),
         )
 
 

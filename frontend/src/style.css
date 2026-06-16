@@ -363,6 +363,15 @@ label {
   margin-top: 14px;
 }
 
+.debug-card p {
+  margin-bottom: 10px;
+  word-break: break-word;
+}
+
+.debug-list {
+  margin-top: 10px;
+}
+
 .report-actions {
   align-items: center;
 }

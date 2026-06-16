@@ -118,6 +118,11 @@ describe('Triage view', () => {
       current_question: null,
       report_id: null,
       messages: [],
+      current_agent: 'result_agent',
+      node_trace: ['bootstrap_context', 'supervisor_route', 'safety_agent', 'triage_agent', 'result_agent'],
+      agent_trace: [{ agent: 'result_agent', summary: 'status=completed risk=medium' }],
+      route_reason: 'all core fields are ready for final triage result',
+      knowledge_summary: 'No knowledge hits retrieved for the current triage turn.',
     });
 
     const wrapper = mountView();
@@ -140,6 +145,11 @@ describe('Triage view', () => {
         current_question: null,
         report_id: null,
         messages: [],
+        current_agent: 'result_agent',
+        node_trace: ['bootstrap_context', 'supervisor_route', 'safety_agent', 'triage_agent', 'result_agent'],
+        agent_trace: [{ agent: 'result_agent', summary: 'status=completed risk=medium' }],
+        route_reason: 'all core fields are ready for final triage result',
+        knowledge_summary: 'No knowledge hits retrieved for the current triage turn.',
       })
       .mockResolvedValueOnce({
         session_id: 'session-1',
@@ -149,6 +159,11 @@ describe('Triage view', () => {
         current_question: null,
         report_id: 'report-1',
         messages: [],
+        current_agent: 'result_agent',
+        node_trace: ['bootstrap_context', 'supervisor_route', 'safety_agent', 'triage_agent', 'result_agent'],
+        agent_trace: [{ agent: 'result_agent', summary: 'status=completed risk=medium' }],
+        route_reason: 'all core fields are ready for final triage result',
+        knowledge_summary: 'No knowledge hits retrieved for the current triage turn.',
       });
     createTriageReport.mockResolvedValue(report);
     getTriageReport.mockResolvedValue(report);
@@ -163,5 +178,50 @@ describe('Triage view', () => {
     expect(wrapper.text()).toContain('医生速览');
     expect(wrapper.text()).toContain('患者说明');
     expect(wrapper.text()).toContain('建议优先就诊：耳鼻喉科');
+  });
+
+  it('shows orchestration debug details after loading a follow-up session', async () => {
+    createTriageSession.mockResolvedValue({ session_id: 'session-1', status: 'created' });
+    analyzeTriage.mockResolvedValue({
+      session_id: 'session-1',
+      status: 'needs_follow_up' as const,
+      risk_level: 'medium' as const,
+      question: '这种不舒服持续多久了？',
+      known_facts_summary: '部位：咽喉',
+      missing_fields: ['duration'],
+    });
+    getTriageSession.mockResolvedValue({
+      session_id: 'session-1',
+      status: 'needs_follow_up',
+      latest_request: null,
+      latest_result: {
+        session_id: 'session-1',
+        status: 'needs_follow_up' as const,
+        risk_level: 'medium' as const,
+        question: '这种不舒服持续多久了？',
+        known_facts_summary: '部位：咽喉',
+        missing_fields: ['duration'],
+      },
+      current_question: '这种不舒服持续多久了？',
+      report_id: null,
+      messages: [],
+      current_agent: 'follow_up_agent',
+      node_trace: ['bootstrap_context', 'supervisor_route', 'safety_agent', 'triage_agent', 'knowledge_agent', 'follow_up_agent'],
+      agent_trace: [
+        { agent: 'safety_agent', summary: 'risk=medium decision=continue' },
+        { agent: 'knowledge_agent', summary: 'hits=0' },
+      ],
+      route_reason: 'missing core fields require one follow-up question',
+      knowledge_summary: 'No knowledge hits retrieved for the current triage turn.',
+    });
+
+    const wrapper = mountView();
+
+    await clickButtonByText(wrapper, '开始导诊');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('follow_up_agent');
+    expect(wrapper.text()).toContain('knowledge_agent');
+    expect(wrapper.text()).toContain('No knowledge hits retrieved for the current triage turn.');
   });
 });

@@ -162,6 +162,42 @@ Base URL: `http://localhost:8000`
 }
 ```
 
+## Session Debug Fields
+
+`GET /api/triage/sessions/{session_id}` 现在会额外返回一组轻量调试字段，用于观察 LangGraph + 多Agent 编排过程：
+
+```json
+{
+  "current_agent": "follow_up_agent",
+  "node_trace": [
+    "bootstrap_context",
+    "supervisor_route",
+    "safety_agent",
+    "supervisor_route",
+    "triage_agent",
+    "supervisor_route",
+    "knowledge_agent",
+    "supervisor_route",
+    "follow_up_agent",
+    "persist_state"
+  ],
+  "agent_trace": [
+    {
+      "agent": "safety_agent",
+      "summary": "risk=medium decision=continue"
+    },
+    {
+      "agent": "knowledge_agent",
+      "summary": "hits=0"
+    }
+  ],
+  "route_reason": "missing core fields require one follow-up question",
+  "knowledge_summary": "No knowledge hits retrieved for the current triage turn."
+}
+```
+
+这些字段用于调试和可视化，不影响原有导诊主结果结构。
+
 ## `POST /api/reports`
 
 ### 请求示例

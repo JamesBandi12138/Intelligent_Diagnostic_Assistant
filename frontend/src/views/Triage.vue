@@ -81,6 +81,21 @@
             <p class="subtle">当前状态：{{ sessionStatusLabel }}</p>
             <p class="subtle">当前报告：{{ activeReportId || '尚未生成' }}</p>
           </div>
+          <section
+            v-if="currentAgent || nodeTrace.length || agentTrace.length || routeReason || knowledgeSummary"
+            class="result-card debug-card"
+          >
+            <h3>编排调试</h3>
+            <p v-if="currentAgent"><strong>current_agent:</strong> {{ currentAgent }}</p>
+            <p v-if="routeReason"><strong>route_reason:</strong> {{ routeReason }}</p>
+            <p v-if="knowledgeSummary"><strong>knowledge_summary:</strong> {{ knowledgeSummary }}</p>
+            <p v-if="nodeTrace.length"><strong>node_trace:</strong> {{ nodeTrace.join(' -> ') }}</p>
+            <ul v-if="agentTrace.length" class="debug-list">
+              <li v-for="(item, index) in agentTrace" :key="`${item.agent}-${index}`">
+                {{ item.agent }} | {{ item.summary }}
+              </li>
+            </ul>
+          </section>
         </article>
 
         <article class="panel conversation-panel">
@@ -282,6 +297,7 @@ import { computed, onMounted, ref } from 'vue';
 
 import {
   analyzeTriage,
+  type AgentTraceEntry,
   createTriageReport,
   createTriageSession,
   getTriageReport,
@@ -325,6 +341,11 @@ const followUpSummary = ref('');
 const completedResult = ref<CompletedTriageResponse | null>(null);
 const latestResponse = ref<AnalyzeTriageResponse | null>(null);
 const report = ref<ReportResponse | null>(null);
+const currentAgent = ref('');
+const nodeTrace = ref<string[]>([]);
+const agentTrace = ref<AgentTraceEntry[]>([]);
+const routeReason = ref('');
+const knowledgeSummary = ref('');
 
 const submitting = ref(false);
 const loadingSession = ref(false);
@@ -395,6 +416,11 @@ async function applySessionState(session: TriageSessionDetailResponse) {
   messages.value = session.messages;
   followUpQuestion.value = session.current_question || '';
   latestResponse.value = session.latest_result;
+  currentAgent.value = session.current_agent || '';
+  nodeTrace.value = session.node_trace || [];
+  agentTrace.value = session.agent_trace || [];
+  routeReason.value = session.route_reason || '';
+  knowledgeSummary.value = session.knowledge_summary || '';
 
   if (session.latest_result?.status === 'needs_follow_up') {
     followUpSummary.value = session.latest_result.known_facts_summary;
@@ -529,6 +555,11 @@ function resetConversation() {
   completedResult.value = null;
   latestResponse.value = null;
   report.value = null;
+  currentAgent.value = '';
+  nodeTrace.value = [];
+  agentTrace.value = [];
+  routeReason.value = '';
+  knowledgeSummary.value = '';
   answerText.value = '';
   lookupSessionId.value = '';
   errorMessage.value = '';

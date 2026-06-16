@@ -144,3 +144,71 @@ def test_completed_session_rejects_additional_answers():
     )
 
     assert extra_response.status_code == 409
+
+
+def test_session_detail_exposes_langgraph_debug_trace_for_follow_up_flow():
+    session_id = f"graph-session-{uuid4()}"
+    analyze_response = client.post(
+        "/api/triage/analyze",
+        json={
+            "session_id": session_id,
+            "patient": {
+                "age": 32,
+                "sex": "female",
+                "medical_history": [],
+                "allergies": [],
+                "medications": [],
+            },
+            "symptom_text": "喉咙不舒服",
+            "city": "鍖椾含",
+        },
+    )
+
+    assert analyze_response.status_code == 200
+    assert analyze_response.json()["status"] == "needs_follow_up"
+
+    session_response = client.get(f"/api/triage/sessions/{session_id}")
+    session_data = session_response.json()
+
+    assert session_response.status_code == 200
+    assert session_data["current_agent"] == "follow_up_agent"
+    assert "supervisor_route" in session_data["node_trace"]
+    assert "safety_agent" in session_data["node_trace"]
+    assert "triage_agent" in session_data["node_trace"]
+    assert "knowledge_agent" in session_data["node_trace"]
+    assert "follow_up_agent" in session_data["node_trace"]
+    assert any(item["agent"] == "knowledge_agent" for item in session_data["agent_trace"])
+    assert session_data["route_reason"]
+    assert "knowledge_summary" in session_data
+
+
+def test_emergency_flow_trace_routes_from_safety_to_result_without_follow_up():
+    session_id = f"graph-session-{uuid4()}"
+    analyze_response = client.post(
+        "/api/triage/analyze",
+        json={
+            "session_id": session_id,
+            "patient": {
+                "age": 68,
+                "sex": "male",
+                "medical_history": ["高血压"],
+                "allergies": [],
+                "medications": [],
+            },
+            "symptom_text": "突然胸痛胸闷，大汗，感觉喘不上气",
+        },
+    )
+
+    assert analyze_response.status_code == 200
+    assert analyze_response.json()["status"] == "completed"
+
+    session_response = client.get(f"/api/triage/sessions/{session_id}")
+    session_data = session_response.json()
+
+    assert session_response.status_code == 200
+    assert session_data["current_agent"] == "result_agent"
+    assert "safety_agent" in session_data["node_trace"]
+    assert "result_agent" in session_data["node_trace"]
+    assert "follow_up_agent" not in session_data["node_trace"]
+    assert any(item["agent"] == "safety_agent" for item in session_data["agent_trace"])
+    assert "emergency" in session_data["route_reason"].lower()

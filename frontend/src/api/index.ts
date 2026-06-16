@@ -64,6 +64,11 @@ export interface TriageMessage {
   kind: string;
 }
 
+export interface AgentTraceEntry {
+  agent: string;
+  summary: string;
+}
+
 export interface TriageSessionDetailResponse {
   session_id: string;
   status: string;
@@ -72,6 +77,11 @@ export interface TriageSessionDetailResponse {
   current_question: string | null;
   report_id?: string | null;
   messages: TriageMessage[];
+  current_agent?: string | null;
+  node_trace?: string[];
+  agent_trace?: AgentTraceEntry[];
+  route_reason?: string | null;
+  knowledge_summary?: string | null;
 }
 
 export interface TriageSessionResponse {

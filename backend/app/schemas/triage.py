@@ -106,3 +106,8 @@ class TriageSessionDetailResponse(BaseModel):
     current_question: str | None = None
     report_id: str | None = None
     messages: list[TriageMessage] = Field(default_factory=list)
+    current_agent: str | None = None
+    node_trace: list[str] = Field(default_factory=list)
+    agent_trace: list[dict[str, str]] = Field(default_factory=list)
+    route_reason: str | None = None
+    knowledge_summary: str | None = None

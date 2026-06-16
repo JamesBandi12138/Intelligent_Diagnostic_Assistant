@@ -20,8 +20,10 @@ frontend/.env
 data/
 logs/
 *.sqlite3
+.runtime/
+backend-live.log
+frontend-live.log
 
 # IDE
 .idea/
 .vscode/
-

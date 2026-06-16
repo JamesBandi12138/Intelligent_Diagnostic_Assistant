@@ -70,12 +70,61 @@ export interface TriageSessionDetailResponse {
   latest_request: TriageAnalyzeRequest | null;
   latest_result: AnalyzeTriageResponse | null;
   current_question: string | null;
+  report_id?: string | null;
   messages: TriageMessage[];
 }
 
 export interface TriageSessionResponse {
   session_id: string;
   status: string;
+}
+
+export interface ReportCreateRequest {
+  session_id: string;
+}
+
+export interface ReportPatientSnapshot {
+  age: number;
+  sex: Sex;
+  pregnancy_status?: string | null;
+  medical_history: string[];
+  allergies: string[];
+  medications: string[];
+}
+
+export interface ReportTriageSummary {
+  chief_complaint: string;
+  risk_level: RiskLevel;
+  recommended_departments: DepartmentRecommendation[];
+  care_path: string;
+  generated_from_session_status: string;
+}
+
+export interface DoctorView {
+  chief_complaint: string;
+  key_facts: Record<string, string>;
+  risk_notes: string;
+  recommended_department_summary: string;
+  preparation_checklist: string[];
+}
+
+export interface PatientView {
+  what_this_means: string;
+  why_this_department: string;
+  what_to_prepare: string[];
+  when_to_seek_urgent_care: string;
+}
+
+export interface ReportResponse {
+  report_id: string;
+  session_id: string;
+  status: string;
+  created_at: string;
+  patient_snapshot: ReportPatientSnapshot;
+  triage_summary: ReportTriageSummary;
+  doctor_view: DoctorView;
+  patient_view: PatientView;
+  disclaimer: string;
 }
 
 export async function createTriageSession(): Promise<TriageSessionResponse> {
@@ -90,6 +139,16 @@ export async function analyzeTriage(payload: TriageAnalyzeRequest): Promise<Anal
 
 export async function getTriageSession(sessionId: string): Promise<TriageSessionDetailResponse> {
   const response = await api.get(`/api/triage/sessions/${sessionId}`);
+  return response.data;
+}
+
+export async function createTriageReport(payload: ReportCreateRequest): Promise<ReportResponse> {
+  const response = await api.post('/api/reports', payload);
+  return response.data;
+}
+
+export async function getTriageReport(reportId: string): Promise<ReportResponse> {
+  const response = await api.get(`/api/reports/${reportId}`);
   return response.data;
 }
 

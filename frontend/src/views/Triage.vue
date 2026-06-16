@@ -6,7 +6,7 @@
           <p class="eyebrow">Pre-Consultation Triage</p>
           <h1>智能导诊与就医助手</h1>
           <p class="lead">
-            先整理症状，再按需要逐条追问，最后给出更稳妥的就医路径建议。
+            先整理症状，再按需要逐条追问，最后给出就医建议，并生成一份便于患者和医生查看的导诊报告。
           </p>
         </div>
         <span class="badge">非诊断 · 仅导诊参考</span>
@@ -79,6 +79,7 @@
           <div class="result-card session-card">
             <p class="subtle">当前会话：{{ activeSessionId || '尚未创建' }}</p>
             <p class="subtle">当前状态：{{ sessionStatusLabel }}</p>
+            <p class="subtle">当前报告：{{ activeReportId || '尚未生成' }}</p>
           </div>
         </article>
 
@@ -87,7 +88,7 @@
             <div class="conversation-head">
               <div>
                 <h2>导诊对话</h2>
-                <p>系统一次只会问一个最关键的问题，避免把用户问乱。</p>
+                <p>系统一次只问一个最关键的问题，避免把用户问乱。</p>
               </div>
               <span v-if="currentRiskLevel" :class="['risk', currentRiskLevel]">{{ currentRiskLevel }}</span>
             </div>
@@ -171,9 +172,89 @@
               </section>
             </div>
 
+            <div class="actions report-actions">
+              <button type="button" :disabled="reportLoading" @click="generateReport">
+                {{ reportLoading ? '处理中...' : activeReportId ? '重新读取报告' : '生成导诊报告' }}
+              </button>
+              <p v-if="reportError" class="error">{{ reportError }}</p>
+            </div>
+
             <section class="result-card summary-card">
               <h3>免责声明</h3>
               <p class="disclaimer">{{ completedResult.disclaimer }}</p>
+            </section>
+          </section>
+
+          <section v-if="report" class="report-stack">
+            <div class="result-header">
+              <div>
+                <h2>导诊报告</h2>
+                <p class="subtle">报告 ID：{{ report.report_id }}</p>
+              </div>
+              <span :class="['risk', report.triage_summary.risk_level]">{{ report.triage_summary.risk_level }}</span>
+            </div>
+
+            <div class="report-grid">
+              <section class="result-card">
+                <h3>报告概览</h3>
+                <p><strong>主诉：</strong>{{ report.triage_summary.chief_complaint }}</p>
+                <p><strong>推荐科室：</strong>{{ departmentSummary }}</p>
+                <p><strong>就医路径：</strong>{{ report.triage_summary.care_path }}</p>
+              </section>
+
+              <section class="result-card">
+                <h3>患者快照</h3>
+                <ul>
+                  <li>年龄：{{ report.patient_snapshot.age }}</li>
+                  <li>性别：{{ report.patient_snapshot.sex }}</li>
+                  <li>孕产状态：{{ report.patient_snapshot.pregnancy_status || '无' }}</li>
+                  <li>既往史：{{ joinList(report.patient_snapshot.medical_history) }}</li>
+                  <li>过敏史：{{ joinList(report.patient_snapshot.allergies) }}</li>
+                  <li>当前用药：{{ joinList(report.patient_snapshot.medications) }}</li>
+                </ul>
+              </section>
+            </div>
+
+            <div class="report-grid">
+              <section class="result-card">
+                <h3>医生速览</h3>
+                <p><strong>主诉：</strong>{{ report.doctor_view.chief_complaint }}</p>
+                <ul>
+                  <li v-for="(value, key) in report.doctor_view.key_facts" :key="key">
+                    {{ factLabels[key] || key }}：{{ value }}
+                  </li>
+                </ul>
+                <p><strong>风险提示：</strong>{{ report.doctor_view.risk_notes }}</p>
+                <p><strong>科室建议：</strong>{{ report.doctor_view.recommended_department_summary }}</p>
+              </section>
+
+              <section class="result-card">
+                <h3>患者说明</h3>
+                <p>{{ report.patient_view.what_this_means }}</p>
+                <p><strong>为什么建议这个科室：</strong>{{ report.patient_view.why_this_department }}</p>
+                <p><strong>什么时候尽快就医：</strong>{{ report.patient_view.when_to_seek_urgent_care }}</p>
+              </section>
+            </div>
+
+            <div class="report-grid">
+              <section class="result-card">
+                <h3>医生查看时建议携带</h3>
+                <ul>
+                  <li v-for="item in report.doctor_view.preparation_checklist" :key="item">{{ item }}</li>
+                </ul>
+              </section>
+
+              <section class="result-card">
+                <h3>患者准备清单</h3>
+                <ul>
+                  <li v-for="item in report.patient_view.what_to_prepare" :key="item">{{ item }}</li>
+                </ul>
+              </section>
+            </div>
+
+            <section class="result-card summary-card">
+              <h3>报告免责声明</h3>
+              <p class="disclaimer">{{ report.disclaimer }}</p>
             </section>
           </section>
         </article>
@@ -185,11 +266,7 @@
           <p>刷新后会优先恢复本地最近一次会话，也可以手动输入会话 ID 拉回状态。</p>
         </div>
         <div class="actions">
-          <input
-            v-model="lookupSessionId"
-            class="session-input"
-            placeholder="粘贴 session id"
-          />
+          <input v-model="lookupSessionId" class="session-input" placeholder="粘贴 session id" />
           <button type="button" :disabled="loadingSession || !lookupSessionId.trim()" @click="loadSession">
             {{ loadingSession ? '加载中...' : '加载会话' }}
           </button>
@@ -205,10 +282,13 @@ import { computed, onMounted, ref } from 'vue';
 
 import {
   analyzeTriage,
+  createTriageReport,
   createTriageSession,
+  getTriageReport,
   getTriageSession,
   type AnalyzeTriageResponse,
   type CompletedTriageResponse,
+  type ReportResponse,
   type RiskLevel,
   type Sex,
   type TriageMessage,
@@ -216,6 +296,14 @@ import {
 } from '../api';
 
 const SESSION_STORAGE_KEY = 'ida-active-session-id';
+
+const factLabels: Record<string, string> = {
+  location: '症状部位',
+  duration: '持续时间',
+  severity: '严重程度',
+  accompanying_symptoms: '伴随症状',
+  special_context: '特殊背景',
+};
 
 const symptomText = ref('喉咙不舒服');
 const age = ref(32);
@@ -228,6 +316,7 @@ const medicationsText = ref('');
 const answerText = ref('');
 
 const activeSessionId = ref('');
+const activeReportId = ref('');
 const lookupSessionId = ref('');
 const sessionStatus = ref('created');
 const messages = ref<TriageMessage[]>([]);
@@ -235,18 +324,22 @@ const followUpQuestion = ref('');
 const followUpSummary = ref('');
 const completedResult = ref<CompletedTriageResponse | null>(null);
 const latestResponse = ref<AnalyzeTriageResponse | null>(null);
+const report = ref<ReportResponse | null>(null);
 
 const submitting = ref(false);
 const loadingSession = ref(false);
+const reportLoading = ref(false);
 const errorMessage = ref('');
 const sessionError = ref('');
+const reportError = ref('');
 
 const hasActiveConversation = computed(() => Boolean(activeSessionId.value) && sessionStatus.value !== 'completed');
-const currentRiskLevel = computed<RiskLevel | ''>(() => {
-  if (!latestResponse.value) {
+const currentRiskLevel = computed<RiskLevel | ''>(() => latestResponse.value?.risk_level ?? '');
+const departmentSummary = computed(() => {
+  if (!report.value) {
     return '';
   }
-  return latestResponse.value.risk_level;
+  return report.value.triage_summary.recommended_departments.map((item) => item.name).join('、');
 });
 
 const sessionStatusLabel = computed(() => {
@@ -269,6 +362,10 @@ function splitList(value: string): string[] {
     .filter(Boolean);
 }
 
+function joinList(items: string[]): string {
+  return items.length ? items.join('、') : '无';
+}
+
 function persistSessionId(sessionId: string | null) {
   if (sessionId) {
     localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
@@ -277,13 +374,28 @@ function persistSessionId(sessionId: string | null) {
   localStorage.removeItem(SESSION_STORAGE_KEY);
 }
 
-function applySessionState(session: TriageSessionDetailResponse) {
+async function loadReportById(reportId: string) {
+  reportLoading.value = true;
+  reportError.value = '';
+  try {
+    report.value = await getTriageReport(reportId);
+    activeReportId.value = reportId;
+  } catch (error) {
+    reportError.value = error instanceof Error ? error.message : '报告加载失败，请稍后重试。';
+  } finally {
+    reportLoading.value = false;
+  }
+}
+
+async function applySessionState(session: TriageSessionDetailResponse) {
   activeSessionId.value = session.session_id;
+  activeReportId.value = session.report_id || '';
   lookupSessionId.value = session.session_id;
   sessionStatus.value = session.status;
   messages.value = session.messages;
   followUpQuestion.value = session.current_question || '';
   latestResponse.value = session.latest_result;
+
   if (session.latest_result?.status === 'needs_follow_up') {
     followUpSummary.value = session.latest_result.known_facts_summary;
     completedResult.value = null;
@@ -291,12 +403,19 @@ function applySessionState(session: TriageSessionDetailResponse) {
     followUpSummary.value = '';
     completedResult.value = session.latest_result ?? null;
   }
+
+  if (session.report_id) {
+    await loadReportById(session.report_id);
+  } else {
+    report.value = null;
+  }
+
   persistSessionId(session.session_id);
 }
 
 async function syncSession(sessionId: string) {
   const session = await getTriageSession(sessionId);
-  applySessionState(session);
+  await applySessionState(session);
 }
 
 async function submitInitial() {
@@ -307,10 +426,12 @@ async function submitInitial() {
 
   submitting.value = true;
   errorMessage.value = '';
+  reportError.value = '';
 
   try {
     const createdSession = await createTriageSession();
     activeSessionId.value = createdSession.session_id;
+    activeReportId.value = '';
     lookupSessionId.value = createdSession.session_id;
     sessionStatus.value = createdSession.status;
 
@@ -344,6 +465,7 @@ async function submitAnswer() {
 
   submitting.value = true;
   errorMessage.value = '';
+  reportError.value = '';
 
   try {
     const response = await analyzeTriage({
@@ -357,6 +479,26 @@ async function submitAnswer() {
     errorMessage.value = error instanceof Error ? error.message : '回答提交失败，请稍后重试。';
   } finally {
     submitting.value = false;
+  }
+}
+
+async function generateReport() {
+  if (!activeSessionId.value) {
+    return;
+  }
+
+  reportLoading.value = true;
+  reportError.value = '';
+
+  try {
+    const generated = await createTriageReport({ session_id: activeSessionId.value });
+    report.value = generated;
+    activeReportId.value = generated.report_id;
+    await syncSession(activeSessionId.value);
+  } catch (error) {
+    reportError.value = error instanceof Error ? error.message : '报告生成失败，请稍后重试。';
+  } finally {
+    reportLoading.value = false;
   }
 }
 
@@ -379,16 +521,19 @@ async function loadSession() {
 
 function resetConversation() {
   activeSessionId.value = '';
+  activeReportId.value = '';
   sessionStatus.value = 'created';
   messages.value = [];
   followUpQuestion.value = '';
   followUpSummary.value = '';
   completedResult.value = null;
   latestResponse.value = null;
+  report.value = null;
   answerText.value = '';
   lookupSessionId.value = '';
   errorMessage.value = '';
   sessionError.value = '';
+  reportError.value = '';
   persistSessionId(null);
 }
 

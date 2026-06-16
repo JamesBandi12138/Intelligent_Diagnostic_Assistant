@@ -26,6 +26,7 @@ class SessionRecord:
     latest_request: TriageRequest | None = None
     latest_result: AnalyzeResponse | None = None
     final_result: dict[str, Any] | None = None
+    report_id: str | None = None
     messages: list[TriageMessage] = field(default_factory=list)
 
     def to_payload(self) -> dict:
@@ -43,6 +44,7 @@ class SessionRecord:
             "latest_request": self.latest_request.model_dump(mode="json") if self.latest_request else None,
             "latest_result": self.latest_result.model_dump(mode="json") if self.latest_result else None,
             "final_result": self.final_result,
+            "report_id": self.report_id,
             "messages": [message.model_dump(mode="json") for message in self.messages],
         }
 
@@ -65,6 +67,7 @@ class SessionRecord:
             latest_request=TriageRequest.model_validate(latest_request) if latest_request else None,
             latest_result=_validate_analyze_response(latest_result),
             final_result=payload.get("final_result"),
+            report_id=payload.get("report_id"),
             messages=[TriageMessage.model_validate(item) for item in payload.get("messages", [])],
         )
 

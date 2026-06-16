@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.routers.reports import router as reports_router
 from app.routers.triage import router as triage_router
 from common.config import settings
 from common.logging import logger
@@ -21,6 +22,7 @@ app.add_middleware(
 )
 
 app.include_router(triage_router, prefix="/api")
+app.include_router(reports_router, prefix="/api")
 
 
 @app.get("/health")
@@ -31,4 +33,3 @@ async def health_check() -> dict[str, str]:
         "service": "intelligent-diagnostic-assistant",
         "env": settings.APP_ENV,
     }
-

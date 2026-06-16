@@ -183,7 +183,8 @@ li + li {
 .input-panel,
 .conversation-panel,
 .result-stack,
-.follow-up-box {
+.follow-up-box,
+.report-stack {
   display: grid;
   gap: 18px;
 }
@@ -341,6 +342,12 @@ label {
   margin-bottom: 14px;
 }
 
+.report-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
 .result-card {
   border: 1px solid rgba(29, 66, 57, 0.1);
   border-radius: 18px;
@@ -354,6 +361,10 @@ label {
 
 .session-card {
   margin-top: 14px;
+}
+
+.report-actions {
+  align-items: center;
 }
 
 .disclaimer {
@@ -371,7 +382,8 @@ label {
 
   .workspace-grid,
   .form-grid,
-  .result-grid {
+  .result-grid,
+  .report-grid {
     grid-template-columns: 1fr;
   }
 

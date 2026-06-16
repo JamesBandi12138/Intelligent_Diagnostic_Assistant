@@ -104,4 +104,5 @@ class TriageSessionDetailResponse(BaseModel):
     latest_request: TriageRequest | None = None
     latest_result: AnalyzeResponse | None = None
     current_question: str | None = None
+    report_id: str | None = None
     messages: list[TriageMessage] = Field(default_factory=list)

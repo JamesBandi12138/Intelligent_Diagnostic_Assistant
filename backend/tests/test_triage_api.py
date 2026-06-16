@@ -161,7 +161,7 @@ def test_session_detail_exposes_langgraph_debug_trace_for_follow_up_flow():
                 "medications": [],
             },
             "symptom_text": "喉咙不舒服",
-            "city": "鍖椾含",
+            "city": "北京",
         },
     )
 
@@ -257,3 +257,43 @@ def test_triage_analyze_injects_llm_client_when_enabled(monkeypatch):
 
     assert response.status_code == 200
     assert captured["llm_client"] is sentinel_client
+
+
+def test_correction_message_replaces_initial_wrong_symptom_and_changes_department():
+    create_response = client.post("/api/triage/sessions")
+    session_id = create_response.json()["session_id"]
+
+    first_response = client.post(
+        "/api/triage/analyze",
+        json={
+            "session_id": session_id,
+            "patient": {
+                "age": 30,
+                "sex": "female",
+                "medical_history": [],
+                "allergies": [],
+                "medications": [],
+            },
+            "symptom_text": "胸口疼",
+        },
+    )
+
+    assert first_response.status_code == 200
+    assert first_response.json()["status"] == "needs_follow_up"
+
+    corrected_response = client.post(
+        "/api/triage/analyze",
+        json={
+            "session_id": session_id,
+            "answer": "刚才说错了，不是胸口，是喉咙痛三天，吞咽时更明显，轻微，没有胸痛气短，也没有慢性病。",
+        },
+    )
+
+    corrected_data = corrected_response.json()
+
+    assert corrected_response.status_code == 200
+    assert corrected_data["status"] == "completed"
+    assert corrected_data["recommended_departments"][0]["name"] == "耳鼻喉科"
+    assert corrected_data["risk_level"] in ("low", "medium")
+    assert "喉咙" in corrected_data["report_summary"]
+    assert "刚才说错" not in corrected_data["report_summary"]

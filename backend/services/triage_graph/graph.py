@@ -74,6 +74,22 @@ def _append_message(messages: list[TriageMessage], role: str, content: str, kind
     return updated
 
 
+def _is_correction_message(text: str) -> bool:
+    lowered = text.strip()
+    return any(token in lowered for token in ("刚才说错", "说错了", "更正一下", "改一下", "不是"))
+
+
+def _relevant_user_messages(messages: list[TriageMessage]) -> list[TriageMessage]:
+    user_messages = [message for message in messages if message.role == "user" and message.kind in {"symptom", "answer"}]
+    last_correction_index = -1
+    for index, message in enumerate(user_messages):
+        if _is_correction_message(message.content):
+            last_correction_index = index
+    if last_correction_index >= 0:
+        return user_messages[last_correction_index:]
+    return user_messages
+
+
 def _trace_node(state: TriageGraphState, node_name: str) -> list[str]:
     trace = list(state.get("node_trace", []))
     trace.append(node_name)
@@ -87,13 +103,29 @@ def _trace_agent(state: TriageGraphState, agent_name: str, summary: str) -> list
 
 
 def _combined_text_from_parts(symptom_text: str | None, latest_answer: str | None, messages: list[TriageMessage]) -> str:
-    parts: list[str] = []
-    if symptom_text:
-        parts.append(symptom_text)
-    if latest_answer:
-        parts.append(latest_answer)
-    parts.extend(message.content for message in messages if message.role == "user" and message.kind == "answer")
+    relevant_messages = _relevant_user_messages(messages)
+    parts = [message.content for message in relevant_messages if message.content.strip()]
+    if not parts:
+        if symptom_text:
+            parts.append(symptom_text)
+        if latest_answer:
+            parts.append(latest_answer)
     return " ".join(part.strip() for part in parts if part and part.strip()).strip()
+
+
+def _chief_complaint_text(state: TriageGraphState, combined_text: str) -> str:
+    latest_answer = state.get("latest_answer", "").strip()
+    if latest_answer and _is_correction_message(latest_answer):
+        normalized = re.sub(r"^(?:我)?刚才说错了?[，,：:\s]*", "", latest_answer)
+        normalized = re.sub(r"^不是[^，。；,;]*[，,、\s]*是", "", normalized)
+        normalized = normalized.strip("，,。；;：: ")
+        return normalized or latest_answer
+
+    symptom_text = (state.get("symptom_text") or "").strip()
+    if symptom_text:
+        return symptom_text
+
+    return combined_text
 
 
 def _special_context_flags(patient: PatientProfile | None, text: str) -> dict[str, bool]:
@@ -145,7 +177,21 @@ def _extract_facts(text: str, patient: PatientProfile | None) -> tuple[dict[str,
     if found_symptoms:
         facts["accompanying_symptoms"] = "、".join(found_symptoms)
         confidence["accompanying_symptoms"] = "rule"
-    elif any(keyword in text for keyword in ("没有发热", "没有咳嗽", "无发热", "无咳嗽")):
+    elif any(
+        keyword in text
+        for keyword in (
+            "没有发热",
+            "没有咳嗽",
+            "无发热",
+            "无咳嗽",
+            "没有胸闷",
+            "没有胸痛",
+            "没有气短",
+            "无胸闷",
+            "无胸痛",
+            "无气短",
+        )
+    ):
         facts["accompanying_symptoms"] = "已否认常见伴随症状"
         confidence["accompanying_symptoms"] = "negation_rule"
 
@@ -171,6 +217,35 @@ def _extract_facts(text: str, patient: PatientProfile | None) -> tuple[dict[str,
 
 def _missing_fields(facts: dict[str, str]) -> list[str]:
     return [field for field in FIELD_ORDER if field not in facts]
+
+
+def _choose_follow_up_field(state: TriageGraphState, combined_text: str) -> str:
+    facts = state.get("extracted_facts", {})
+    missing_fields = list(state.get("missing_fields", []))
+    if not missing_fields:
+        return "special_context"
+
+    latest_answer = state.get("latest_answer", "")
+    correction_detected = _is_correction_message(latest_answer)
+
+    if correction_detected and "location" in missing_fields:
+        return "location"
+
+    symptom_focus = combined_text
+    has_location_context = "location" not in missing_fields or bool(facts.get("location"))
+
+    if has_location_context and "duration" in missing_fields:
+        return "duration"
+
+    if any(token in symptom_focus for token in ("胸", "喘", "呼吸", "腹", "呕吐", "发热")):
+        if "accompanying_symptoms" in missing_fields:
+            return "accompanying_symptoms"
+
+    for field_name in ("location", "duration", "severity", "accompanying_symptoms", "special_context"):
+        if field_name in missing_fields:
+            return field_name
+
+    return missing_fields[0]
 
 
 def _build_known_facts_summary(facts: dict[str, str]) -> str:
@@ -516,7 +591,12 @@ def _knowledge_agent(state: TriageGraphState) -> TriageGraphState:
 
 async def _follow_up_agent(state: TriageGraphState) -> TriageGraphState:
     node_trace = _trace_node(state, "follow_up_agent")
-    question_key = state["missing_fields"][0]
+    combined_text = _combined_text_from_parts(
+        state.get("symptom_text"),
+        state.get("latest_answer"),
+        state.get("conversation_messages", []),
+    )
+    question_key = _choose_follow_up_field(state, combined_text)
     raw_question = FOLLOW_UP_QUESTIONS[question_key]
     known_facts_summary = _build_known_facts_summary(state.get("extracted_facts", {}))
     llm_question, llm_error = await _rewrite_follow_up_question_with_llm(
@@ -601,11 +681,12 @@ async def _result_agent(state: TriageGraphState) -> TriageGraphState:
     else:
         department = _recommend_department(combined_text)
         care_path = _build_care_path(RiskLevel(state["risk_level"]))
-        raw_summary = f"主诉：{state.get('symptom_text')}。当前补全信息后，建议优先咨询 {department.name}。"
+        chief_complaint = _chief_complaint_text(state, combined_text).rstrip("。！？!?；;，, ")
+        raw_summary = f"主诉：{chief_complaint}。当前补全信息后，建议优先咨询 {department.name}。"
         llm_summary, llm_error = await _rewrite_report_summary_with_llm(
             llm_client=state.get("llm_client"),
             raw_summary=raw_summary,
-            symptom_text=state.get("symptom_text", ""),
+            symptom_text=chief_complaint,
             risk_level=state["risk_level"],
             department_name=department.name,
             care_path=care_path,

@@ -243,10 +243,11 @@ describe('Triage view', () => {
     expect(wrapper.text()).toContain('follow_up_agent');
     expect(wrapper.text()).toContain('knowledge_agent');
     expect(wrapper.text()).toContain('No knowledge hits retrieved for the current triage turn.');
-    expect(wrapper.text()).toContain('raw_follow_up_question');
-    expect(wrapper.text()).toContain('llm_follow_up_question');
+    expect(wrapper.text()).toContain('follow_up_raw');
+    expect(wrapper.text()).toContain('follow_up_llm');
     expect(wrapper.text()).toContain('rewrite_follow_up_question');
     expect(wrapper.text()).toContain('llm_used: true');
+    expect(wrapper.text()).toContain('如果你上一句说错了，可以直接改口');
   });
 
   it('shows llm summary trace after loading a completed session', async () => {
@@ -281,8 +282,8 @@ describe('Triage view', () => {
     await clickButtonByText(wrapper, '开始导诊');
     await flushPromises();
 
-    expect(wrapper.text()).toContain('raw_report_summary');
-    expect(wrapper.text()).toContain('llm_report_summary');
+    expect(wrapper.text()).toContain('summary_raw');
+    expect(wrapper.text()).toContain('summary_llm');
     expect(wrapper.text()).toContain('rewrite_report_summary');
     expect(wrapper.text()).toContain('llm_used: true');
   });

@@ -36,6 +36,10 @@ class TriageGraphState(TypedDict, total=False):
     node_trace: list[str]
     agent_trace: list[dict[str, str]]
     route_reason: str | None
+    route_follow_up_history: list[str]
+    current_follow_up_topic: str | None
+    complaint_candidates: list[str]
+    primary_focus_confirmed: bool
     debug_snapshot: dict[str, Any]
     safety_checked: bool
     facts_updated: bool
@@ -47,3 +51,5 @@ class TriageGraphState(TypedDict, total=False):
     llm_used: bool
     llm_error: str | None
     llm_trace: list[LlmTraceEntry]
+    complaint_category: str
+    complaint_routed: bool

@@ -43,6 +43,9 @@ const completedResult = {
   disclaimer: '本结果仅用于诊前导诊参考，不能替代医生诊断、检查或治疗决策。',
 };
 
+const abdominalKnowledgeSummary =
+  '腹痛导诊卡：腹痛导诊优先确认疼痛位置、起病时间、疼痛程度，以及是否伴随发热、呕吐、黑便或压痛加重。 红旗信号：持续加重的右下腹痛、呕吐明显、黑便、腹部压痛反跳痛。 优先追问：疼痛最明显在上腹、脐周还是右下腹；是否有发热、呕吐、腹泻或黑便；疼痛是持续痛还是阵发性绞痛。 候选科室：消化内科、普外科、急诊科。 图谱高频科室：内科、消化内科、外科。';
+
 const report = {
   report_id: 'report-1',
   session_id: 'session-1',
@@ -122,6 +125,19 @@ describe('Triage view', () => {
     expect(wrapper.find<HTMLTextAreaElement>('#symptom').element.value).toContain('喉咙痛三天');
   });
 
+  it('disables and clears pregnancy input when male is selected', async () => {
+    const wrapper = mountView();
+    const sexSelect = wrapper.find<HTMLSelectElement>('select');
+    const pregnancyInput = wrapper.find<HTMLInputElement>('input[placeholder*="孕早期"]');
+
+    await pregnancyInput.setValue('孕早期');
+    await sexSelect.setValue('male');
+
+    expect(pregnancyInput.element.disabled).toBe(true);
+    expect(pregnancyInput.element.value).toBe('');
+    expect(wrapper.text()).toContain('男性患者不会采集孕产状态');
+  });
+
   it('shows the report generation action after triage completes', async () => {
     createTriageSession.mockResolvedValue({ session_id: 'session-1', status: 'created' });
     analyzeTriage.mockResolvedValue(completedResult);
@@ -151,6 +167,74 @@ describe('Triage view', () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain('生成导诊报告');
+  });
+
+  it('shows a visible knowledge highlight after triage completes', async () => {
+    createTriageSession.mockResolvedValue({ session_id: 'session-1', status: 'created' });
+    analyzeTriage.mockResolvedValue(completedResult);
+    getTriageSession.mockResolvedValue({
+      session_id: 'session-1',
+      status: 'completed',
+      latest_request: null,
+      latest_result: completedResult,
+      current_question: null,
+      report_id: null,
+      messages: [],
+      current_agent: 'result_agent',
+      node_trace: ['bootstrap_context', 'supervisor_route', 'safety_agent', 'triage_agent', 'result_agent'],
+      agent_trace: [{ agent: 'result_agent', summary: 'status=completed risk=medium' }],
+      route_reason: 'all core fields are ready for final triage result',
+      knowledge_summary: abdominalKnowledgeSummary,
+      raw_report_summary: '主诉：肚子疼。目前信息补全后，建议优先咨询消化内科。',
+      llm_report_summary: '根据你补充的情况，目前更建议优先到消化内科门诊评估腹痛。',
+      llm_used: true,
+      llm_error: null,
+      llm_trace: [{ agent: 'result_agent', task: 'rewrite_report_summary', used: true, fallback: false, error: null }],
+    });
+
+    const wrapper = mountView();
+
+    await startTriage(wrapper, '肚子疼，从昨晚开始，右下腹更明显，疼痛 5 分。');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('导诊要点');
+    expect(wrapper.text()).toContain('腹痛导诊优先确认疼痛位置');
+    expect(wrapper.text()).toContain('图谱高频科室');
+  });
+
+  it('shows result-stage follow-up prompts after triage completes', async () => {
+    createTriageSession.mockResolvedValue({ session_id: 'session-1', status: 'created' });
+    analyzeTriage.mockResolvedValue(completedResult);
+    getTriageSession.mockResolvedValue({
+      session_id: 'session-1',
+      status: 'completed',
+      latest_request: null,
+      latest_result: completedResult,
+      current_question: null,
+      report_id: null,
+      messages: [],
+      current_agent: 'result_agent',
+      node_trace: ['bootstrap_context', 'supervisor_route', 'safety_agent', 'triage_agent', 'result_agent'],
+      agent_trace: [{ agent: 'result_agent', summary: 'status=completed risk=medium' }],
+      route_reason: 'all core fields are ready for final triage result',
+      knowledge_summary: abdominalKnowledgeSummary,
+      raw_report_summary: '主诉：肚子疼。目前信息补全后，建议优先咨询消化内科。',
+      llm_report_summary: '根据你补充的情况，目前更建议优先到消化内科门诊评估腹痛。',
+      llm_used: true,
+      llm_error: null,
+      llm_trace: [{ agent: 'result_agent', task: 'rewrite_report_summary', used: true, fallback: false, error: null }],
+    });
+
+    const wrapper = mountView();
+
+    await startTriage(wrapper, '肚子疼，从昨晚开始，右下腹更明显，疼痛 5 分。');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('结果出来后也可以继续问');
+    await clickButtonByText(wrapper, '为什么这个科');
+    expect(wrapper.find<HTMLTextAreaElement>('#result-follow-up-answer').element.value).toContain('为什么建议这个科');
+    await clickButtonByText(wrapper, '能先线上问诊吗');
+    expect(wrapper.find<HTMLTextAreaElement>('#result-follow-up-answer').element.value).toContain('我可以先线上问诊吗');
   });
 
   it('renders doctor and patient report sections after generating a report', async () => {
@@ -267,7 +351,7 @@ describe('Triage view', () => {
     expect(wrapper.text()).toContain('follow_up_llm');
     expect(wrapper.text()).toContain('rewrite_follow_up_question');
     expect(wrapper.text()).toContain('llm_used: true');
-    expect(wrapper.text()).toContain('如果你上一句说错了，可以直接改口');
+    expect(wrapper.find<HTMLTextAreaElement>('#follow-up-answer').attributes('placeholder')).toContain('改成脑袋疼');
   });
 
   it('shows llm summary trace after loading a completed session', async () => {

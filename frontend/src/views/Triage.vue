@@ -1,148 +1,151 @@
 <template>
   <main class="app-shell">
-    <section class="hero-band">
-      <div class="hero-copy">
-        <p class="hero-kicker">Patient-First Triage</p>
-        <h1>先把不舒服说清楚，再决定该去哪里看</h1>
-        <p class="hero-lead">
-          这是一个诊前导诊助手。你只需要先告诉我哪里不舒服、年龄和性别，我会像门诊分诊台一样，一次只问一个真正有必要的问题。
-        </p>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Intelligent Diagnostic Assistant</p>
+        <h1>诊前导诊工作台</h1>
       </div>
-      <div class="hero-note">
-        <span class="hero-badge">仅供导诊参考</span>
-        <p>如果你上一句说错了，直接改口就行，比如“刚才说错了，不是发烧，是咳嗽三天”。</p>
+      <div class="topbar-status">
+        <span class="status-chip">{{ sessionStatusLabel }}</span>
+        <span v-if="currentRiskLevel" :class="['risk-chip', currentRiskLevel]">{{ currentRiskLevel }}</span>
       </div>
-    </section>
+    </header>
 
     <section class="workspace">
       <aside class="intake-panel panel">
-        <div class="panel-intro">
-          <p class="panel-kicker">第一步</p>
-          <h2>先告诉我这次最主要的不舒服</h2>
-          <p>首轮只需要症状、年龄和性别。其他信息我会在需要时再问，不让你一上来就填一堆表。</p>
-        </div>
+        <section class="panel-section">
+          <div class="section-head">
+            <p class="eyebrow">主诉</p>
+            <h2>这次哪里不舒服</h2>
+          </div>
 
-        <label for="symptom">
-          这次哪里不舒服
-          <textarea
-            id="symptom"
-            v-model="symptomText"
-            rows="6"
-            :disabled="hasActiveConversation"
-            placeholder="例如：喉咙痛三天，吞咽时更明显，不知道该挂什么科。"
-          />
-        </label>
-
-        <div class="example-row" v-if="!hasActiveConversation">
-          <button
-            v-for="example in symptomExamples"
-            :key="example.label"
-            type="button"
-            class="example-chip"
-            @click="useSymptomExample(example.text)"
-          >
-            {{ example.label }}
-          </button>
-        </div>
-
-        <div class="starter-grid">
-          <label>
-            年龄
-            <input v-model.number="age" type="number" min="0" max="130" :disabled="hasActiveConversation" />
+          <label for="symptom">
+            症状描述
+            <textarea
+              id="symptom"
+              v-model="symptomText"
+              rows="6"
+              :disabled="hasActiveConversation"
+              placeholder="例如：肚子疼从昨晚开始，主要在右下腹，疼痛 5 分，没有发热。"
+            />
           </label>
-          <label>
-            性别
-            <select v-model="sex" :disabled="hasActiveConversation">
-              <option value="unknown">未说明</option>
-              <option value="female">女</option>
-              <option value="male">男</option>
-            </select>
+
+          <div class="example-row" v-if="!hasActiveConversation">
+            <button
+              v-for="example in symptomExamples"
+              :key="example.label"
+              type="button"
+              class="example-chip"
+              @click="useSymptomExample(example.text)"
+            >
+              {{ example.label }}
+            </button>
+          </div>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-head compact">
+            <p class="eyebrow">患者</p>
+            <h2>基本信息</h2>
+          </div>
+
+          <div class="starter-grid">
+            <label>
+              年龄
+              <input v-model.number="age" type="number" min="0" max="130" :disabled="hasActiveConversation" />
+            </label>
+            <label>
+              性别
+              <select v-model="sex" :disabled="hasActiveConversation">
+                <option value="unknown">未说明</option>
+                <option value="female">女性</option>
+                <option value="male">男性</option>
+              </select>
+            </label>
+          </div>
+
+          <label for="pregnancy-status">
+            孕产状态
+            <input
+              id="pregnancy-status"
+              v-model="pregnancyStatus"
+              name="pregnancy_status"
+              :disabled="hasActiveConversation || pregnancyDisabled"
+              placeholder="例如：孕早期 / 产后"
+            />
+            <span v-if="pregnancyDisabled" class="field-note">男性患者不会采集孕产状态</span>
           </label>
-        </div>
+        </section>
 
         <details class="optional-details">
-          <summary>补充信息（可选）</summary>
+          <summary>补充资料</summary>
           <div class="optional-grid">
             <label>
               城市
-              <input v-model="city" :disabled="hasActiveConversation" placeholder="北京" />
-            </label>
-            <label>
-              孕产状态
-              <input v-model="pregnancyStatus" :disabled="hasActiveConversation" placeholder="例如：孕早期 / 产后 / 不适用" />
+              <input v-model="city" :disabled="hasActiveConversation" placeholder="可留空" />
             </label>
             <label>
               既往史
-              <input v-model="medicalHistoryText" :disabled="hasActiveConversation" placeholder="逗号分隔，例如：高血压，鼻炎" />
+              <input v-model="medicalHistoryText" :disabled="hasActiveConversation" placeholder="高血压，糖尿病" />
             </label>
             <label>
               过敏史
-              <input v-model="allergiesText" :disabled="hasActiveConversation" placeholder="逗号分隔，例如：青霉素" />
+              <input v-model="allergiesText" :disabled="hasActiveConversation" placeholder="青霉素" />
             </label>
-            <label class="optional-wide">
+            <label>
               当前用药
-              <input v-model="medicationsText" :disabled="hasActiveConversation" placeholder="逗号分隔，例如：布洛芬，氯雷他定" />
+              <input v-model="medicationsText" :disabled="hasActiveConversation" placeholder="布洛芬，氯雷他定" />
             </label>
           </div>
         </details>
 
         <div class="primary-actions">
           <button type="button" :disabled="submitting || hasActiveConversation" @click="submitInitial">
-            {{ submitting ? '正在发起导诊...' : '开始导诊' }}
+            {{ submitting ? '分析中...' : '开始导诊' }}
           </button>
           <button v-if="activeSessionId" type="button" class="secondary-button" :disabled="submitting" @click="resetConversation">
-            开始新会话
+            新会话
           </button>
         </div>
 
         <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
 
-        <section class="session-panel">
+        <section class="session-card">
           <div>
-            <p class="session-label">当前会话</p>
+            <p class="session-label">会话</p>
             <p class="session-value">{{ activeSessionId || '尚未创建' }}</p>
           </div>
-          <div class="session-meta">
-            <span class="status-chip">{{ sessionStatusLabel }}</span>
-            <span v-if="currentRiskLevel" :class="['risk-chip', currentRiskLevel]">{{ currentRiskLevel }}</span>
-          </div>
           <p class="session-summary">{{ patientStarterSummary }}</p>
-        </section>
-
-        <section class="tip-panel">
-          <h3>对话提示</h3>
-          <ul>
-            <li>如果我理解错了，直接改口，不用从头开始。</li>
-            <li>如果有危险信号，比如胸痛、呼吸困难、持续高热，请直接说明。</li>
-            <li>如果你不知道怎么描述，可以用“轻微 / 中等 / 严重”或 0 到 10 分来形容。</li>
-          </ul>
         </section>
       </aside>
 
       <section class="conversation-panel panel">
-        <header class="conversation-header">
+        <header class="conversation-toolbar">
           <div>
-            <p class="panel-kicker">第二步</p>
-            <h2>像和分诊护士说话一样告诉我情况</h2>
-            <p>我会先整理已经知道的重点，再继续追问真正影响分诊判断的那一项。</p>
+            <p class="eyebrow">导诊过程</p>
+            <h2>当前判断</h2>
           </div>
-          <div class="conversation-status">
-            <span class="status-chip">{{ sessionStatusLabel }}</span>
-            <span v-if="currentRiskLevel" :class="['risk-chip', currentRiskLevel]">{{ currentRiskLevel }}</span>
+          <div class="stage-strip">
+            <span :class="{ active: Boolean(activeSessionId) }">安全排查</span>
+            <span :class="{ active: Boolean(followUpQuestion || completedResult) }">症状整理</span>
+            <span :class="{ active: Boolean(completedResult) }">分科建议</span>
           </div>
         </header>
 
-        <section class="assistant-summary" v-if="followUpSummary || latestResponse?.status === 'needs_follow_up'">
-          <p class="assistant-summary-label">我目前的理解</p>
-          <p>{{ followUpSummary || '我已经收到你的初步描述，接下来会继续确认最关键的信息。' }}</p>
+        <section v-if="followUpSummary || latestResponse?.status === 'needs_follow_up'" class="assistant-summary">
+          <p class="summary-label">已理解的信息</p>
+          <p>{{ followUpSummary || '已收到初始描述，正在补齐导诊所需信息。' }}</p>
+        </section>
+
+        <section v-if="followUpQuestion && knowledgeHighlight" class="assistant-summary knowledge-brief">
+          <p class="summary-label">本轮导诊要点</p>
+          <p>{{ knowledgeHighlight }}</p>
         </section>
 
         <section class="timeline">
           <div v-if="messages.length === 0" class="empty-state">
-            <h3>你可以这样开始</h3>
-            <p>“喉咙痛三天，吞咽时更明显，没有发热。”</p>
-            <p>“肚子痛，主要在右下腹，从昨晚开始。”</p>
-            <p>“咳嗽一周，晚上更明显，担心是不是该去医院。”</p>
+            <h3>等待开始导诊</h3>
+            <p>填写左侧信息后，系统会在这里显示追问和结果。</p>
           </div>
 
           <article
@@ -158,26 +161,25 @@
         <section v-if="followUpQuestion" class="follow-up-panel">
           <div class="follow-up-head">
             <div>
-              <p class="panel-kicker">当前问题</p>
+              <p class="eyebrow">追问</p>
               <h3>{{ followUpQuestion }}</h3>
             </div>
-            <p class="follow-up-tip">如果你上一句说错了，可以直接改口，我会按你更正后的内容继续判断。</p>
           </div>
 
           <label for="follow-up-answer" class="composer-label">
-            继续补充
+            回复
             <textarea
               id="follow-up-answer"
               v-model="answerText"
               rows="4"
               :disabled="submitting"
-              placeholder="直接回复这一问即可，例如：喉咙痛三天，疼痛 4 分，没有发热咳嗽。"
+              placeholder="例如：改成脑袋疼，两天了，疼痛 6 分，没有发热呕吐。"
             />
           </label>
 
           <div class="composer-actions">
             <button type="button" :disabled="submitting || !answerText.trim()" @click="submitAnswer">
-              {{ submitting ? '正在提交...' : '发送回答' }}
+              {{ submitting ? '提交中...' : '发送回答' }}
             </button>
           </div>
         </section>
@@ -185,8 +187,8 @@
         <section v-if="completedResult" class="result-panel">
           <header class="result-header">
             <div>
-              <p class="panel-kicker">导诊建议</p>
-              <h2>先给你一个清楚的就医建议</h2>
+              <p class="eyebrow">导诊建议</p>
+              <h2>{{ completedResult.recommended_departments[0]?.name || '就医建议' }}</h2>
             </div>
             <span :class="['risk-chip', completedResult.risk_level]">{{ completedResult.risk_level }}</span>
           </header>
@@ -205,29 +207,72 @@
             </section>
 
             <section class="result-card">
-              <h3>为什么这样建议</h3>
+              <h3>依据</h3>
               <p>{{ completedResult.report_summary }}</p>
             </section>
 
             <section class="result-card">
-              <h3>接下来怎么做</h3>
+              <h3>下一步</h3>
               <p>{{ completedResult.care_path }}</p>
             </section>
 
             <section class="result-card">
-              <h3>去之前准备什么</h3>
+              <h3>就诊前准备</h3>
               <ul>
                 <li v-for="item in completedResult.preparation_checklist" :key="item">{{ item }}</li>
               </ul>
             </section>
           </div>
 
+          <section v-if="knowledgeHighlight" class="result-card knowledge-card">
+            <h3>导诊要点</h3>
+            <p>{{ knowledgeHighlight }}</p>
+          </section>
+
           <div class="primary-actions">
             <button type="button" :disabled="reportLoading" @click="generateReport">
-              {{ reportLoading ? '正在整理报告...' : activeReportId ? '重新读取导诊报告' : '生成导诊报告' }}
+              {{ reportLoading ? '整理报告中...' : activeReportId ? '重新读取导诊报告' : '生成导诊报告' }}
             </button>
             <p v-if="reportError" class="error-text">{{ reportError }}</p>
           </div>
+
+          <section class="follow-up-panel result-follow-up-panel">
+            <div class="follow-up-head">
+              <div>
+                <p class="eyebrow">继续追问</p>
+                <h3>结果出来后也可以继续问</h3>
+              </div>
+            </div>
+
+            <div class="example-row">
+              <button
+                v-for="prompt in resultFollowUpPrompts"
+                :key="prompt.label"
+                type="button"
+                class="example-chip"
+                @click="useResultFollowUpPrompt(prompt.text)"
+              >
+                {{ prompt.label }}
+              </button>
+            </div>
+
+            <label for="result-follow-up-answer" class="composer-label">
+              继续提问
+              <textarea
+                id="result-follow-up-answer"
+                v-model="answerText"
+                rows="3"
+                :disabled="submitting"
+                placeholder="例如：为什么建议这个科？我现在要不要马上去医院？"
+              />
+            </label>
+
+            <div class="composer-actions">
+              <button type="button" :disabled="submitting || !answerText.trim()" @click="submitAnswer">
+                {{ submitting ? '提交中...' : '继续对话' }}
+              </button>
+            </div>
+          </section>
 
           <section class="disclaimer-card">
             <h3>说明</h3>
@@ -238,8 +283,8 @@
         <section v-if="report" class="report-panel">
           <header class="result-header">
             <div>
-              <p class="panel-kicker">导诊报告</p>
-              <h2>给患者和医生都能看懂的一份摘要</h2>
+              <p class="eyebrow">导诊报告</p>
+              <h2>医生和患者共用摘要</h2>
             </div>
             <span :class="['risk-chip', report.triage_summary.risk_level]">{{ report.triage_summary.risk_level }}</span>
           </header>
@@ -282,7 +327,7 @@
               <h3>患者说明</h3>
               <p>{{ report.patient_view.what_this_means }}</p>
               <p><strong>为什么建议这个科：</strong>{{ report.patient_view.why_this_department }}</p>
-              <p><strong>什么时候尽快就医：</strong>{{ report.patient_view.when_to_seek_urgent_care }}</p>
+              <p><strong>何时尽快就医：</strong>{{ report.patient_view.when_to_seek_urgent_care }}</p>
             </section>
           </div>
 
@@ -365,15 +410,14 @@
     </section>
 
     <section class="resume-panel panel">
-      <div class="panel-intro">
-        <p class="panel-kicker">继续上次会话</p>
-        <h2>如果你刷新了页面，可以把会话拉回来</h2>
-        <p>系统会优先恢复最近一次本地会话，你也可以手动输入会话 ID。</p>
+      <div>
+        <p class="eyebrow">恢复会话</p>
+        <h2>继续上次导诊</h2>
       </div>
       <div class="resume-actions">
         <input v-model="lookupSessionId" class="session-input" placeholder="粘贴 session id" />
         <button type="button" :disabled="loadingSession || !lookupSessionId.trim()" @click="loadSession">
-          {{ loadingSession ? '正在加载...' : '加载会话' }}
+          {{ loadingSession ? '加载中...' : '加载会话' }}
         </button>
       </div>
       <p v-if="sessionError" class="error-text">{{ sessionError }}</p>
@@ -382,7 +426,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 
 import {
   analyzeTriage,
@@ -407,7 +451,7 @@ const DEBUG_STORAGE_KEY = 'ida-debug-diagnostics';
 const symptomExamples = [
   {
     label: '喉咙痛',
-    text: '喉咙痛三天，吞咽时更明显，没有发热。',
+    text: '喉咙痛三天，吞咽时更明显，疼痛 4 分，没有发热咳嗽。',
   },
   {
     label: '眼睛不舒服',
@@ -415,8 +459,20 @@ const symptomExamples = [
   },
   {
     label: '肚子痛',
-    text: '肚子痛，从昨晚开始，主要在右下腹，不确定该挂什么科。',
+    text: '肚子疼，从昨晚开始，主要在右下腹，疼痛 5 分，没有发热呕吐。',
   },
+  {
+    label: '头痛',
+    text: '头痛两天，主要在太阳穴附近，疼痛 6 分，没有发热呕吐。',
+  },
+];
+
+const resultFollowUpPrompts = [
+  { label: '为什么这个科', text: '为什么建议这个科？' },
+  { label: '要不要快去医院', text: '我现在要不要马上去医院？' },
+  { label: '先做什么', text: '那我现在最该先做什么？' },
+  { label: '怎么准备', text: '去医院前我需要准备什么？' },
+  { label: '能先线上问诊吗', text: '我可以先线上问诊吗？' },
 ];
 
 const factLabels: Record<string, string> = {
@@ -429,7 +485,7 @@ const factLabels: Record<string, string> = {
 
 const symptomText = ref('');
 const age = ref(32);
-const sex = ref<Sex>('female');
+const sex = ref<Sex>('unknown');
 const pregnancyStatus = ref('');
 const city = ref('');
 const medicalHistoryText = ref('');
@@ -473,13 +529,22 @@ const reportError = ref('');
 const debugMode = ref(false);
 
 const hasActiveConversation = computed(() => Boolean(activeSessionId.value) && sessionStatus.value !== 'completed');
+const pregnancyDisabled = computed(() => sex.value !== 'female');
 const currentRiskLevel = computed<RiskLevel | ''>(() => latestResponse.value?.risk_level ?? '');
+const knowledgeHighlight = computed(() => {
+  const summary = knowledgeSummary.value.trim();
+  if (!summary || summary === '未命中本地导诊知识卡。' || summary === 'No knowledge hits retrieved for the current triage turn.') {
+    return '';
+  }
+  return summary;
+});
 const patientStarterSummary = computed(() => {
-  const items = [`${age.value} 岁`, sex.value === 'female' ? '女性' : sex.value === 'male' ? '男性' : '性别未说明'];
+  const sexLabel = sex.value === 'female' ? '女性' : sex.value === 'male' ? '男性' : '性别未说明';
+  const items = [`${age.value} 岁`, sexLabel];
   if (city.value.trim()) {
     items.push(city.value.trim());
   }
-  return items.join(' · ');
+  return items.join(' / ');
 });
 const hasDebugPanel = computed(
   () =>
@@ -548,9 +613,15 @@ const sessionStatusLabel = computed(() => {
     return '已完成';
   }
   if (sessionStatus.value === 'needs_follow_up' || sessionStatus.value === 'collecting') {
-    return '继续追问中';
+    return '追问中';
   }
   return sessionStatus.value;
+});
+
+watch(sex, (value) => {
+  if (value !== 'female') {
+    pregnancyStatus.value = '';
+  }
 });
 
 function splitList(value: string): string[] {
@@ -566,6 +637,10 @@ function joinList(items: string[]): string {
 
 function useSymptomExample(text: string) {
   symptomText.value = text;
+}
+
+function useResultFollowUpPrompt(text: string) {
+  answerText.value = text;
 }
 
 function toggleDebugMode() {
@@ -647,7 +722,7 @@ async function syncSession(sessionId: string) {
 
 async function submitInitial() {
   if (!symptomText.value.trim()) {
-    errorMessage.value = '请先告诉我这次哪里不舒服。';
+    errorMessage.value = '请先填写这次最主要的不舒服。';
     return;
   }
 
@@ -667,7 +742,7 @@ async function submitInitial() {
       patient: {
         age: age.value,
         sex: sex.value,
-        pregnancy_status: pregnancyStatus.value.trim() || null,
+        pregnancy_status: sex.value === 'female' ? pregnancyStatus.value.trim() || null : null,
         medical_history: splitList(medicalHistoryText.value),
         allergies: splitList(allergiesText.value),
         medications: splitList(medicationsText.value),

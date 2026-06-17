@@ -21,6 +21,7 @@ from app.schemas.triage import (
     TriageStatus,
 )
 from common.config import settings
+from services.knowledge_base.local_cards import KNOWLEDGE_CARDS
 from services.knowledge_base.milvus_store import knowledge_store
 from services.safety_guardrails.service import detect_risk
 from services.session_store import create_session, get_session, save_session
@@ -45,8 +46,62 @@ FOLLOW_UP_QUESTIONS = {
     "special_context": "你是否有慢性病、怀孕、术后恢复、长期用药，或者属于儿童、老人等需要特别注意的情况？",
 }
 
+COMPLAINT_ROUTE_QUESTIONS = {
+    "abdominal_location_detail": "肚子痛更具体在肚子哪个位置，比如上腹、肚脐周围、右下腹，还是固定在某一侧？",
+    "abdominal_red_flags": "除了肚子痛，还有没有发热、呕吐、腹泻、黑便，或者按压时明显更痛？",
+    "headache_red_flags": "这次头痛是突然一下子很重，还是慢慢加重？同时有没有视物模糊、说话不清、肢体无力、呕吐或发热？",
+    "eye_red_flags": "有没有视力下降、畏光、明显分泌物增多、外伤，或者最近佩戴隐形眼镜后加重？",
+    "throat_red_flags": "除了咽喉痛，还有没有发热、咳嗽、吞咽困难，或者呼吸受限？",
+    "chest_red_flags": "胸痛是压榨样还是刺痛样？有没有活动后加重、大汗、气短，或者向左肩背部放射？",
+}
+
+COMPLAINT_ALIAS_TO_CATEGORY = {
+    alias: card.card_id
+    for card in KNOWLEDGE_CARDS
+    for alias in card.aliases
+}
+
+COMPLAINT_CATEGORY_PROMPTS = {
+    "abdominal_pain": (
+        ("abdominal_location_detail", "肚子痛更具体在肚子哪个位置，比如上腹、肚脐周围、右下腹，还是固定在某一侧？"),
+        ("abdominal_red_flags", "除了肚子痛，还有没有发热、呕吐、腹泻、黑便，或者按压时明显更痛？"),
+    ),
+    "headache": (
+        ("headache_red_flags", "这次头痛是突然一下子很重，还是慢慢加重？同时有没有视物模糊、说话不清、肢体无力、呕吐或发热？"),
+    ),
+    "eye_discomfort": (
+        ("eye_red_flags", "有没有视力下降、畏光、明显分泌物增多、外伤，或者最近佩戴隐形眼镜后加重？"),
+    ),
+    "throat_discomfort": (
+        ("throat_red_flags", "除了咽喉痛，还有没有发热、咳嗽、吞咽困难，或者呼吸受限？"),
+    ),
+    "chest_pain": (
+        ("chest_red_flags", "胸痛是压榨样还是刺痛样？有没有活动后加重、大汗、气短，或者向左肩背部放射？"),
+    ),
+}
+
+CATEGORY_DISPLAY_NAMES = {
+    "abdominal_pain": "腹痛",
+    "headache": "头痛",
+    "eye_discomfort": "眼部不适",
+    "throat_discomfort": "喉咙不适",
+    "chest_pain": "胸部不适",
+}
+
+CATEGORY_KEYWORDS = {
+    "abdominal_pain": ("肚子", "腹痛", "胃痛", "右下腹", "上腹", "腹部"),
+    "headache": ("头痛", "头疼", "脑袋", "头晕", "偏头痛", "头部"),
+    "eye_discomfort": ("眼睛", "眼痛", "眼红", "眼痒", "异物感", "视物模糊", "眼部"),
+    "throat_discomfort": ("喉咙", "咽痛", "咽喉", "吞咽痛", "嗓子"),
+    "chest_pain": ("胸痛", "胸闷", "胸口痛", "胸前区", "胸口", "胸部"),
+}
+
 
 async def run_triage(request: TriageRequest, llm_client=None) -> AnalyzeResponse:
+    record = _load_or_create_record(request)
+    if record.status == TriageStatus.COMPLETED and request.answer:
+        return _handle_completed_session_follow_up(record, request.answer)
+
     initial_state: TriageGraphState = {
         "request": request,
         "llm_client": llm_client,
@@ -68,6 +123,71 @@ def _load_or_create_record(request: TriageRequest):
     return create_session(str(uuid4()))
 
 
+def _completed_base_response(record) -> TriageResponse:
+    payload = record.final_result or (record.latest_result.model_dump(mode="json") if record.latest_result else None)
+    if not payload:
+        raise HTTPException(status_code=409, detail="Completed session has no final triage result to explain.")
+    return TriageResponse.model_validate(payload)
+
+
+def _build_completed_follow_up_summary(record, answer: str, base_response: TriageResponse) -> str:
+    intent = _classify_follow_up_intent(answer)
+    department = base_response.recommended_departments[0].name if base_response.recommended_departments else "相关科室"
+    reason = base_response.recommended_departments[0].reason if base_response.recommended_departments else "当前信息更适合先做专科评估。"
+    care_path = base_response.care_path
+    checklist = [item.strip("。") for item in base_response.preparation_checklist if item.strip()]
+    checklist_summary = "；".join(checklist[:3]) if checklist else "携带身份证件、既往病历和当前用药信息"
+
+    if intent in {"ask_department", "ask_why", "ask_general_question"}:
+        return f"目前更建议优先看 {department}，主要因为 {reason}"
+    if intent == "ask_urgency":
+        if base_response.risk_level == RiskLevel.EMERGENCY:
+            return "按当前结果，已经属于需要优先急诊处理的情况，建议立刻去急诊或拨打 120。"
+        if base_response.risk_level == RiskLevel.HIGH:
+            return f"按当前结果，这次不建议继续拖延，{care_path}"
+        return f"按当前结果，暂时不像必须立刻急诊，但还是建议按导诊路径处理：{care_path}"
+    if intent == "ask_next_step":
+        return f"你现在最该先做的是按这个路径就医：{care_path}。如果暂时还不能立刻去，先把症状开始时间、加重变化和目前用药整理好，方便门诊更快判断。"
+    if intent == "ask_preparation":
+        return f"去医院前建议先准备这几样：{checklist_summary}。如果症状有变化，也可以顺手记下开始时间、加重过程和已经试过的处理。"
+    if intent == "ask_online_visit":
+        if base_response.risk_level in {RiskLevel.HIGH, RiskLevel.EMERGENCY}:
+            return f"按当前风险，更建议直接线下就医，不建议只停留在线上问诊。更稳妥的做法是：{care_path}"
+        return f"可以先线上问诊做初步咨询，但如果症状持续、加重，或出现新的危险信号，还是要尽快线下就医。当前更推荐的处理路径是：{care_path}"
+    if intent == "ask_severity_scale":
+        return "如果按 0 到 10 分来描述，1 到 3 分通常算轻，4 到 6 分算中等，7 分以上偏重。你也可以直接说轻微、中等或明显加重。"
+    raise HTTPException(status_code=409, detail="This triage session has already been completed. Start a new session for new symptoms.")
+
+
+def _handle_completed_session_follow_up(record, answer: str) -> TriageResponse:
+    base_response = _completed_base_response(record)
+    summary = _build_completed_follow_up_summary(record, answer, base_response)
+    response = TriageResponse(
+        session_id=record.session_id,
+        status=TriageStatus.COMPLETED,
+        risk_level=base_response.risk_level,
+        emergency_advice=base_response.emergency_advice,
+        recommended_departments=base_response.recommended_departments,
+        care_path=base_response.care_path,
+        preparation_checklist=base_response.preparation_checklist,
+        report_summary=summary,
+        disclaimer=base_response.disclaimer,
+    )
+    messages = list(record.messages)
+    messages = _append_message(messages, "user", answer, kind="answer")
+    messages = _append_message(messages, "assistant", summary, kind="result_follow_up")
+    record.messages = messages
+    record.latest_result = response
+    record.latest_request = TriageRequest(session_id=record.session_id, answer=answer)
+    record.status = TriageStatus.COMPLETED
+    record.current_question = None
+    record.current_agent = "result_explainer_agent"
+    record.route_reason = "completed session follow-up explanation"
+    record.workflow_status = "completed_follow_up_answered"
+    save_session(record)
+    return response
+
+
 def _append_message(messages: list[TriageMessage], role: str, content: str, kind: str) -> list[TriageMessage]:
     updated = list(messages)
     updated.append(TriageMessage(role=role, content=content, kind=kind))
@@ -76,7 +196,53 @@ def _append_message(messages: list[TriageMessage], role: str, content: str, kind
 
 def _is_correction_message(text: str) -> bool:
     lowered = text.strip()
-    return any(token in lowered for token in ("刚才说错", "说错了", "更正一下", "改一下", "不是"))
+    return any(
+        token in lowered
+        for token in (
+            "刚才说错",
+            "说错了",
+            "更正一下",
+            "改一下",
+            "改成",
+            "改为",
+            "改口",
+            "其实是",
+            "换成",
+            "重新说",
+            "不是",
+        )
+    )
+
+
+def _drop_negated_phrases(text: str) -> str:
+    return re.sub(r"(没有|无|否认)([^，。；,;]*)", "", text)
+
+
+def _has_positive_location(text: str) -> bool:
+    positive_text = _drop_negated_phrases(text)
+    location_keywords = (
+        "眼",
+        "视物",
+        "喉咙",
+        "咽",
+        "胸",
+        "肚子",
+        "腹",
+        "胃",
+        "头痛",
+        "头疼",
+        "头晕",
+        "头部",
+        "脑袋",
+        "偏头痛",
+    )
+    return any(keyword in positive_text for keyword in location_keywords)
+
+
+def _normalize_correction_text(text: str) -> str:
+    normalized = re.sub(r"^(?:我)?(?:刚才)?(?:说错了|说错|更正一下|改一下|改成|改为|改口|其实是|换成|重新说)[，,：:\s]*", "", text.strip())
+    normalized = re.sub(r"^不是[^，。；,;]*[，,、\s]*(?:是|改成|改为)?", "", normalized)
+    return normalized.strip("，。；;：: ")
 
 
 def _relevant_user_messages(messages: list[TriageMessage]) -> list[TriageMessage]:
@@ -103,6 +269,9 @@ def _trace_agent(state: TriageGraphState, agent_name: str, summary: str) -> list
 
 
 def _combined_text_from_parts(symptom_text: str | None, latest_answer: str | None, messages: list[TriageMessage]) -> str:
+    if latest_answer and (_is_correction_message(latest_answer) or _has_positive_location(latest_answer)):
+        return _normalize_correction_text(latest_answer) or latest_answer.strip()
+
     relevant_messages = _relevant_user_messages(messages)
     parts = [message.content for message in relevant_messages if message.content.strip()]
     if not parts:
@@ -115,11 +284,8 @@ def _combined_text_from_parts(symptom_text: str | None, latest_answer: str | Non
 
 def _chief_complaint_text(state: TriageGraphState, combined_text: str) -> str:
     latest_answer = state.get("latest_answer", "").strip()
-    if latest_answer and _is_correction_message(latest_answer):
-        normalized = re.sub(r"^(?:我)?刚才说错了?[，,：:\s]*", "", latest_answer)
-        normalized = re.sub(r"^不是[^，。；,;]*[，,、\s]*是", "", normalized)
-        normalized = normalized.strip("，,。；;：: ")
-        return normalized or latest_answer
+    if latest_answer and (_is_correction_message(latest_answer) or _has_positive_location(latest_answer)):
+        return _normalize_correction_text(latest_answer) or latest_answer
 
     symptom_text = (state.get("symptom_text") or "").strip()
     if symptom_text:
@@ -130,8 +296,9 @@ def _chief_complaint_text(state: TriageGraphState, combined_text: str) -> str:
 
 def _special_context_flags(patient: PatientProfile | None, text: str) -> dict[str, bool]:
     chronic_denied = any(token in text for token in ("没有慢性病", "无慢性病"))
+    pregnancy_applicable = bool(patient and patient.sex != "male")
     return {
-        "pregnancy": bool(patient and patient.pregnancy_status) or ("怀孕" in text),
+        "pregnancy": pregnancy_applicable and (bool(patient and patient.pregnancy_status) or ("怀孕" in text)),
         "elderly": bool(patient and patient.age >= 65),
         "child": bool(patient and patient.age <= 6),
         "chronic_disease": (bool(patient and patient.medical_history) or any(token in text for token in ("高血压", "糖尿病", "慢性病")))
@@ -149,7 +316,7 @@ def _extract_facts(text: str, patient: PatientProfile | None) -> tuple[dict[str,
         ("咽喉", ("喉咙", "咽痛", "吞咽")),
         ("胸部", ("胸痛", "胸闷", "胸口")),
         ("腹部", ("腹痛", "胃痛", "肚子")),
-        ("头部", ("头痛", "头晕")),
+        ("头部", ("头痛", "头疼", "头晕", "头部", "脑袋", "偏头痛")),
     )
     for label, keywords in location_matchers:
         if any(keyword in text for keyword in keywords):
@@ -167,6 +334,17 @@ def _extract_facts(text: str, patient: PatientProfile | None) -> tuple[dict[str,
         facts["severity"] = severity_match.group(1)
         confidence["severity"] = "rule"
     else:
+        severity_aliases = (
+            ("1到3分", ("一点点疼", "有一点疼", "有点疼", "不太疼", "不严重", "轻微")),
+            ("4到6分", ("中等", "还挺疼", "有些疼", "比较疼", "明显疼")),
+            ("7到10分", ("很疼", "疼得厉害", "特别疼", "剧烈", "难以忍受")),
+        )
+        for label, keywords in severity_aliases:
+            if any(keyword in text for keyword in keywords):
+                facts["severity"] = label
+                confidence["severity"] = "rule"
+                break
+    if "severity" not in facts:
         for keyword in ("轻微", "中等", "严重", "剧烈", "明显"):
             if keyword in text:
                 facts["severity"] = keyword
@@ -199,7 +377,7 @@ def _extract_facts(text: str, patient: PatientProfile | None) -> tuple[dict[str,
     if patient and patient.medical_history:
         facts["special_context"] = "、".join(patient.medical_history)
         confidence["special_context"] = "patient_profile"
-    elif patient and patient.pregnancy_status:
+    elif patient and patient.sex != "male" and patient.pregnancy_status:
         facts["special_context"] = patient.pregnancy_status
         confidence["special_context"] = "patient_profile"
     elif patient and (patient.age <= 6 or patient.age >= 65):
@@ -308,6 +486,223 @@ def _choose_follow_up_field(state: TriageGraphState, combined_text: str) -> str:
     return missing_fields[0]
 
 
+def _classify_complaint_category(combined_text: str, facts: dict[str, str]) -> str:
+    for alias, category in COMPLAINT_ALIAS_TO_CATEGORY.items():
+        if alias in combined_text:
+            return category
+
+    location = facts.get("location", "")
+    if location == "腹部" or any(token in combined_text for token in ("肚子", "腹痛", "胃痛", "右下腹", "上腹")):
+        return "abdominal_pain"
+    if location == "头部" or any(token in combined_text for token in ("头痛", "头疼", "脑袋", "头晕", "偏头痛")):
+        return "headache"
+    if location == "眼部" or any(token in combined_text for token in ("眼睛", "眼痛", "眼红", "眼痒", "异物感", "视物模糊")):
+        return "eye_discomfort"
+    if location == "咽喉" or any(token in combined_text for token in ("喉咙", "咽痛", "咽喉", "吞咽痛")):
+        return "throat_discomfort"
+    if location == "胸部" or any(token in combined_text for token in ("胸痛", "胸闷", "胸口痛", "胸前区", "胸口")):
+        return "chest_pain"
+    return "general"
+
+
+def _category_sort_index(category: str) -> int:
+    ordered = list(CATEGORY_DISPLAY_NAMES.keys())
+    return ordered.index(category) if category in ordered else len(ordered)
+
+
+def _detect_complaint_candidates(combined_text: str, facts: dict[str, str]) -> list[str]:
+    positive_text = _drop_negated_phrases(combined_text)
+    scores: dict[str, int] = {}
+
+    for alias, category in COMPLAINT_ALIAS_TO_CATEGORY.items():
+        if alias in positive_text:
+            scores[category] = scores.get(category, 0) + 2
+
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        keyword_hits = sum(1 for keyword in keywords if keyword in positive_text)
+        if keyword_hits:
+            scores[category] = scores.get(category, 0) + keyword_hits
+
+    location_to_category = {
+        "腹部": "abdominal_pain",
+        "头部": "headache",
+        "眼部": "eye_discomfort",
+        "咽喉": "throat_discomfort",
+        "胸部": "chest_pain",
+    }
+    location_category = location_to_category.get(facts.get("location", ""))
+    if location_category:
+        scores[location_category] = scores.get(location_category, 0) + 2
+
+    if not scores:
+        category = _classify_complaint_category(combined_text, facts)
+        return [category] if category != "general" else []
+
+    return sorted(scores, key=lambda item: (-scores[item], _category_sort_index(item)))
+
+
+def _build_multi_symptom_priority_question(candidates: list[str]) -> str:
+    labels = [_candidate_display_name(category) for category in candidates[:3]]
+    if len(labels) == 2:
+        joined = "和".join(labels)
+    else:
+        joined = "、".join(labels)
+    return (
+        f"你刚才同时提到{joined}。现在哪个最影响你，或者哪个更需要优先处理？"
+        "如果两个都差不多，也可以直接告诉我哪个更先出现，或者哪个更难受。"
+    )
+
+
+def _candidate_display_name(category: str) -> str:
+    return CATEGORY_DISPLAY_NAMES.get(category, category)
+
+
+def _extract_primary_focus_from_answer(answer: str, candidates: list[str]) -> str | None:
+    if not answer.strip() or not candidates:
+        return None
+
+    positive_text = _drop_negated_phrases(answer)
+    scores: dict[str, int] = {}
+    for category in candidates:
+        score = 0
+        for keyword in CATEGORY_KEYWORDS.get(category, ()):
+            if keyword in positive_text:
+                score += 1
+            if re.search(fr"(主要|先按|更像是|更难受|更明显).{{0,6}}{re.escape(keyword)}", positive_text):
+                score += 3
+            if re.search(fr"{re.escape(keyword)}.{{0,6}}(更难受|更明显|更严重|主要)", positive_text):
+                score += 3
+        if score:
+            scores[category] = score
+
+    if scores:
+        return sorted(scores, key=lambda item: (-scores[item], _category_sort_index(item)))[0]
+
+    if any(token in answer for token in ("都差不多", "一起出现", "两个都有", "都很明显", "差不多一起")):
+        return candidates[0]
+    return None
+
+
+def _has_location_detail(text: str) -> bool:
+    return any(token in text for token in ("右下腹", "左下腹", "右上腹", "左上腹", "上腹", "下腹", "肚脐", "一侧", "固定在"))
+
+
+def _topic_already_addressed(topic_key: str, combined_text: str, facts: dict[str, str]) -> bool:
+    if topic_key == "abdominal_location_detail":
+        return _has_location_detail(combined_text)
+    if topic_key == "abdominal_red_flags":
+        return any(
+            token in combined_text
+            for token in (
+                "发热",
+                "发烧",
+                "呕吐",
+                "腹泻",
+                "黑便",
+                "按压",
+                "压痛",
+                "没有发热",
+                "没有呕吐",
+                "没有腹泻",
+                "无发热",
+                "无呕吐",
+                "无腹泻",
+            )
+        )
+    if topic_key == "headache_red_flags":
+        return any(
+            token in combined_text
+            for token in (
+                "突然",
+                "慢慢加重",
+                "逐渐加重",
+                "视物",
+                "视力",
+                "说话",
+                "肢体",
+                "无力",
+                "呕吐",
+                "发热",
+                "没有视物",
+                "没有肢体",
+                "没有呕吐",
+                "没有发热",
+            )
+        )
+    if topic_key == "eye_red_flags":
+        return any(
+            token in combined_text
+            for token in (
+                "视力下降",
+                "视物模糊",
+                "畏光",
+                "分泌物",
+                "外伤",
+                "隐形眼镜",
+                "没有视力下降",
+                "没有畏光",
+                "没有外伤",
+                "无视力下降",
+                "无畏光",
+                "无外伤",
+            )
+        )
+    if topic_key == "throat_red_flags":
+        return any(
+            token in combined_text
+            for token in (
+                "发热",
+                "发烧",
+                "咳嗽",
+                "吞咽困难",
+                "呼吸受限",
+                "呼吸困难",
+                "没有发热",
+                "没有咳嗽",
+                "没有吞咽困难",
+                "无发热",
+                "无咳嗽",
+                "无吞咽困难",
+            )
+        )
+    if topic_key == "chest_red_flags":
+        return any(
+            token in combined_text
+            for token in (
+                "活动后加重",
+                "大汗",
+                "气短",
+                "左肩",
+                "肩背",
+                "放射",
+                "没有大汗",
+                "没有气短",
+                "无大汗",
+                "无气短",
+            )
+        )
+    return topic_key in facts
+
+
+def _choose_dynamic_follow_up_topic(state: TriageGraphState, combined_text: str) -> tuple[str, str]:
+    facts = state.get("extracted_facts", {})
+    complaint_candidates = list(state.get("complaint_candidates", []))
+    if len(complaint_candidates) > 1 and not state.get("primary_focus_confirmed"):
+        return "multi_symptom_priority", _build_multi_symptom_priority_question(complaint_candidates)
+
+    complaint_category = state.get("complaint_category", "general")
+    asked_topics = set(state.get("route_follow_up_history", []))
+    for topic_key, question in COMPLAINT_CATEGORY_PROMPTS.get(complaint_category, ()):
+        if _topic_already_addressed(topic_key, combined_text, facts):
+            continue
+        if topic_key in asked_topics:
+            continue
+        return topic_key, question
+
+    field_name = _choose_follow_up_field(state, combined_text)
+    return field_name, FOLLOW_UP_QUESTIONS[field_name]
+
+
 def _build_known_facts_summary(facts: dict[str, str]) -> str:
     if not facts:
         return "目前只知道你有不适症状，还需要补充更具体的信息。"
@@ -323,12 +718,198 @@ def _build_known_facts_summary(facts: dict[str, str]) -> str:
     return "；".join(items)
 
 
+def _augment_known_facts_summary_with_candidates(summary: str, complaint_candidates: list[str]) -> str:
+    if len(complaint_candidates) <= 1:
+        return summary
+    candidate_text = "、".join(_candidate_display_name(category) for category in complaint_candidates[:3])
+    if not summary:
+        return f"当前识别到可能同时涉及：{candidate_text}"
+    return f"{summary}；当前识别到可能同时涉及：{candidate_text}"
+
+
+def _classify_follow_up_intent(text: str) -> str:
+    lowered = text.strip()
+    if not lowered:
+        return "provide_medical_info"
+    if any(token in lowered for token in ("说不清", "不太确定", "不确定", "不知道", "不好说", "记不清", "不清楚", "不太想回答", "先说别的", "先不回答", "这个先不说")):
+        return "express_uncertainty"
+    if any(token in lowered for token in ("为什么要问", "为什么问这个", "为啥问", "问这个干嘛", "问这个做什么")):
+        return "ask_why"
+    if any(token in lowered for token in ("1到10分", "0到10分", "怎么算", "几分算", "低到高", "怎么分级")):
+        return "ask_severity_scale"
+    if any(token in lowered for token in ("挂什么科", "看什么科", "去什么科", "哪个科")):
+        return "ask_department"
+    if any(token in lowered for token in ("严重吗", "要紧吗", "要不要去医院", "需要急诊吗", "急不急", "马上去医院", "立刻去医院")):
+        return "ask_urgency"
+    if any(token in lowered for token in ("先做什么", "下一步", "接下来怎么办", "现在怎么办", "最该先做什么")):
+        return "ask_next_step"
+    if any(token in lowered for token in ("准备什么", "带什么", "要准备什么", "就诊准备", "病历资料", "检查报告")):
+        return "ask_preparation"
+    if any(token in lowered for token in ("线上问诊", "在线问诊", "互联网医院", "线上咨询", "先线上")):
+        return "ask_online_visit"
+    if lowered.endswith("？") or lowered.endswith("?"):
+        return "ask_general_question"
+    return "provide_medical_info"
+
+
+def _topic_explanation(question_key: str) -> str:
+    explanations = {
+        "multi_symptom_priority": "这是为了先确认这次最需要优先处理的主问题，避免多个不适混在一起时把追问方向问散了。",
+        "abdominal_location_detail": "我这样问主要是为了判断腹痛范围，区分更偏消化内科还是外科方向。",
+        "abdominal_red_flags": "这是为了判断腹痛有没有伴随需要尽快线下处理的危险信号。",
+        "headache_red_flags": "这是为了先排除头痛相关的急症风险，比如神经系统受累的情况。",
+        "eye_red_flags": "这是为了判断眼部不适是否涉及视力、外伤或角膜刺激等需要尽快处理的问题。",
+        "throat_red_flags": "这是为了判断咽喉不适有没有感染加重或影响吞咽、呼吸的风险。",
+        "chest_red_flags": "这是为了先区分胸痛是肌肉骨骼不适，还是需要警惕心肺方向的问题。",
+        "severity": "这是为了判断你当前不舒服的大概程度，会影响是否建议尽快线下就医。",
+        "duration": "这是为了判断症状是突然发作还是逐渐加重，也会影响分诊方向。",
+        "location": "这是为了先确认最主要的不适部位，才能更准确判断应该优先看哪个科。",
+        "accompanying_symptoms": "这是为了判断是否存在感染、炎症或其他需要优先排查的情况。",
+        "special_context": "这是为了结合基础病、孕产、术后或长期用药这些背景一起判断风险。",
+    }
+    return explanations.get(question_key, "我先把关键情况补齐，这样才能更稳地判断下一步导诊方向。")
+
+
+def _intent_aware_prefix(*, state: TriageGraphState, question_key: str) -> str:
+    latest_answer = (state.get("latest_answer") or "").strip()
+    if not latest_answer:
+        return ""
+
+    intent = _classify_follow_up_intent(latest_answer)
+    risk_level = RiskLevel(state.get("risk_level", RiskLevel.LOW))
+    department_guess = _recommend_department(_combined_text_from_parts(state.get("symptom_text"), latest_answer, state.get("conversation_messages", []))).name
+
+    if intent == "ask_why":
+        return _topic_explanation(question_key)
+    if intent == "ask_severity_scale":
+        return "如果按 0 到 10 分来描述，1 到 3 分通常算轻，4 到 6 分算中等，7 分以上偏重。"
+    if intent == "ask_department":
+        return f"现在还没到最终定科的时候，不过目前初步倾向会往 {department_guess} 方向判断。"
+    if intent == "ask_urgency":
+        if risk_level == RiskLevel.EMERGENCY:
+            return "按目前信息，已经有急诊风险信号，建议优先急诊。"
+        if risk_level == RiskLevel.HIGH:
+            return "按目前信息，这次不太建议继续拖，最好尽快线下面诊。"
+        return "按目前信息暂时不像必须立刻急诊，但还要继续补几条关键情况。"
+    if intent == "ask_general_question":
+        return "我先顺着你的问题补一句说明，然后继续把导诊关键信息补齐。"
+    if intent == "express_uncertainty":
+        return "如果暂时说不清也没关系，你先告诉我更接近哪一种，或者先说你最确定的部分就行。"
+
+    severity = state.get("extracted_facts", {}).get("severity")
+    if severity:
+        return f"收到，我先记下你说的不舒服程度大约是 {severity}。"
+    return ""
+
+
+def _should_hold_current_topic(state: TriageGraphState) -> bool:
+    latest_answer = (state.get("latest_answer") or "").strip()
+    if not latest_answer:
+        return False
+    return _classify_follow_up_intent(latest_answer) in {
+        "express_uncertainty",
+        "ask_department",
+        "ask_urgency",
+        "ask_general_question",
+        "ask_why",
+    }
+
+
+def _completion_ready(state: TriageGraphState) -> bool:
+    if state.get("safety_decision") == "escalate_emergency":
+        return True
+    if len(state.get("complaint_candidates", [])) > 1 and not state.get("primary_focus_confirmed"):
+        return False
+
+    facts = state.get("extracted_facts", {})
+    category = state.get("complaint_category", "general")
+    risk_level = RiskLevel(state.get("risk_level", RiskLevel.LOW))
+    route_history = set(state.get("route_follow_up_history", []))
+
+    if category == "throat_discomfort":
+        has_core = all(field in facts for field in ("location", "duration"))
+        has_severity_or_companion = "severity" in facts or "accompanying_symptoms" in facts
+        route_ok = "throat_red_flags" in route_history or any(
+            token in (facts.get("accompanying_symptoms", "") + " " + _combined_text_from_parts(state.get("symptom_text"), state.get("latest_answer"), state.get("conversation_messages", [])))
+            for token in ("发热", "咳嗽", "吞咽困难", "呼吸受限", "没有发热", "没有咳嗽", "没有吞咽困难")
+        )
+        return has_core and has_severity_or_companion and route_ok and risk_level in (RiskLevel.LOW, RiskLevel.MEDIUM)
+
+    if category == "eye_discomfort":
+        has_core = all(field in facts for field in ("location", "duration"))
+        route_ok = "eye_red_flags" in route_history or any(
+            token in _combined_text_from_parts(state.get("symptom_text"), state.get("latest_answer"), state.get("conversation_messages", []))
+            for token in ("视力下降", "畏光", "外伤", "隐形眼镜", "没有视力下降", "没有畏光", "没有外伤")
+        )
+        return has_core and route_ok and risk_level in (RiskLevel.LOW, RiskLevel.MEDIUM)
+
+    if category == "headache":
+        has_core = all(field in facts for field in ("location", "duration"))
+        route_ok = "headache_red_flags" in route_history or any(
+            token in _combined_text_from_parts(state.get("symptom_text"), state.get("latest_answer"), state.get("conversation_messages", []))
+            for token in ("突然", "视物", "说话", "肢体", "呕吐", "发热")
+        )
+        return has_core and route_ok and risk_level in (RiskLevel.LOW, RiskLevel.MEDIUM)
+
+    if category == "abdominal_pain":
+        has_core = all(field in facts for field in ("location", "duration"))
+        route_ok = "abdominal_location_detail" in route_history and "abdominal_red_flags" in route_history
+        return has_core and route_ok and risk_level in (RiskLevel.LOW, RiskLevel.MEDIUM)
+
+    if category == "chest_pain":
+        has_core = all(field in facts for field in ("location", "duration"))
+        route_ok = "chest_red_flags" in route_history
+        return has_core and route_ok and risk_level in (RiskLevel.LOW, RiskLevel.MEDIUM)
+
+    return not state.get("missing_fields")
+
+
 def _build_care_path(risk_level: RiskLevel) -> str:
     if risk_level == RiskLevel.HIGH:
         return "建议尽快线下面诊，优先选择门诊或急诊评估，避免继续拖延观察。"
     if risk_level == RiskLevel.MEDIUM:
         return "建议尽快安排线下门诊评估；如症状加重或出现新的红旗信号，请及时急诊就医。"
     return "建议根据症状持续时间和严重程度选择线下门诊；若症状明显加重，应及时急诊评估。"
+
+
+def _extract_segment(content: str, label: str, end_markers: tuple[str, ...]) -> str:
+    start_token = f"{label}："
+    if start_token not in content:
+        return ""
+    segment = content.split(start_token, 1)[1]
+    cut_index = len(segment)
+    for marker in end_markers:
+        marker_index = segment.find(marker)
+        if marker_index >= 0:
+            cut_index = min(cut_index, marker_index)
+    return segment[:cut_index].strip("。；; ")
+
+
+def _build_knowledge_note(state: TriageGraphState) -> str:
+    hits = state.get("knowledge_hits", [])
+    if not hits:
+        return ""
+
+    primary_hit = hits[0]
+    title = str(primary_hit.get("title") or "").strip()
+    content = str(primary_hit.get("content") or "").strip()
+    if not title or not content:
+        return ""
+
+    red_flags = _extract_segment(content, "红旗信号", (" 优先追问：", " 候选科室：", " 图谱高频科室："))
+    departments = _extract_segment(content, "候选科室", (" 图谱高频科室：",))
+    graph_departments = _extract_segment(content, "图谱高频科室", ())
+
+    parts = [f"结合本地导诊知识（{title}）"]
+    if red_flags:
+        parts.append(f"当前需要重点留意 {red_flags}")
+
+    department_part = departments or graph_departments
+    if department_part:
+        parts.append(f"常见分诊方向包括 {department_part}")
+
+    note = "；".join(parts).strip("；")
+    return f"{note}。" if note else ""
 
 
 def _recommend_department(symptom_text: str) -> DepartmentRecommendation:
@@ -349,6 +930,12 @@ def _recommend_department(symptom_text: str) -> DepartmentRecommendation:
         return DepartmentRecommendation(
             name="耳鼻喉科",
             reason="症状集中在咽喉、鼻腔或耳部区域，适合优先由耳鼻喉科评估。",
+            priority=1,
+        )
+    if any(keyword in positive_text for keyword in ("头痛", "头疼", "头晕", "头部", "脑袋", "偏头痛")):
+        return DepartmentRecommendation(
+            name="神经内科",
+            reason="症状集中在头部疼痛或头晕等神经系统相关不适，适合优先由神经内科评估。",
             priority=1,
         )
     if any(keyword in positive_text for keyword in ("腹痛", "腹泻", "恶心", "呕吐", "胃痛", "黑便")):
@@ -532,10 +1119,16 @@ def _bootstrap_context(state: TriageGraphState) -> TriageGraphState:
         "knowledge_hits": [],
         "knowledge_summary": None,
         "knowledge_used": False,
+        "complaint_category": "",
+        "complaint_routed": False,
         "current_agent": None,
         "node_trace": ["bootstrap_context"],
         "agent_trace": [],
         "route_reason": None,
+        "route_follow_up_history": list(record.route_follow_up_history),
+        "current_follow_up_topic": record.current_follow_up_topic,
+        "complaint_candidates": list(record.complaint_candidates),
+        "primary_focus_confirmed": record.primary_focus_confirmed,
         "debug_snapshot": {},
         "safety_checked": False,
         "facts_updated": False,
@@ -577,11 +1170,29 @@ def _supervisor_route(state: TriageGraphState) -> TriageGraphState:
             "next_agent": "triage_agent",
             "route_reason": "structured facts need to be updated",
         }
+    if not state.get("complaint_routed"):
+        return {
+            "node_trace": node_trace,
+            "next_agent": "chief_complaint_router_agent",
+            "route_reason": "chief complaint should be routed before follow-up selection",
+        }
     if not state.get("knowledge_checked"):
         return {
             "node_trace": node_trace,
             "next_agent": "knowledge_agent",
             "route_reason": "knowledge agent should enrich the current triage context",
+        }
+    if _should_hold_current_topic(state):
+        return {
+            "node_trace": node_trace,
+            "next_agent": "follow_up_agent",
+            "route_reason": "user expressed uncertainty, keep current follow-up topic with guidance",
+        }
+    if _completion_ready(state):
+        return {
+            "node_trace": node_trace,
+            "next_agent": "result_agent",
+            "route_reason": "current complaint path has enough information for a triage recommendation",
         }
     if state.get("missing_fields"):
         return {
@@ -674,6 +1285,40 @@ async def _triage_agent(state: TriageGraphState) -> TriageGraphState:
     }
 
 
+def _chief_complaint_router_agent(state: TriageGraphState) -> TriageGraphState:
+    node_trace = _trace_node(state, "chief_complaint_router_agent")
+    combined_text = _combined_text_from_parts(
+        state.get("symptom_text"),
+        state.get("latest_answer"),
+        state.get("conversation_messages", []),
+    )
+    facts = state.get("extracted_facts", {})
+    complaint_candidates = _detect_complaint_candidates(combined_text, facts)
+    chosen_focus = _extract_primary_focus_from_answer(state.get("latest_answer", ""), complaint_candidates)
+    complaint_category = (
+        chosen_focus
+        or state.get("complaint_category")
+        or (complaint_candidates[0] if complaint_candidates else _classify_complaint_category(combined_text, facts))
+    )
+    if complaint_category == "general" and complaint_candidates:
+        complaint_category = complaint_candidates[0]
+    primary_focus_confirmed = bool(chosen_focus or len(complaint_candidates) <= 1)
+    return {
+        "node_trace": node_trace,
+        "agent_trace": _trace_agent(
+            state,
+            "chief_complaint_router_agent",
+            f"category={complaint_category} candidates={len(complaint_candidates)} focus_confirmed={primary_focus_confirmed}",
+        ),
+        "current_agent": "chief_complaint_router_agent",
+        "complaint_category": complaint_category,
+        "complaint_candidates": complaint_candidates,
+        "primary_focus_confirmed": primary_focus_confirmed,
+        "complaint_routed": True,
+        "workflow_status": "complaint_routed",
+    }
+
+
 def _knowledge_agent(state: TriageGraphState) -> TriageGraphState:
     node_trace = _trace_node(state, "knowledge_agent")
     query = _combined_text_from_parts(
@@ -683,7 +1328,7 @@ def _knowledge_agent(state: TriageGraphState) -> TriageGraphState:
     )
     hits = knowledge_store.search(query, top_k=3)
     serialized_hits = [{"title": hit.title, "content": hit.content, "score": str(hit.score)} for hit in hits]
-    summary = "；".join(hit.title for hit in hits) if hits else "No knowledge hits retrieved for the current triage turn."
+    summary = f"{hits[0].title}：{hits[0].content}" if hits else "未命中本地导诊知识卡。"
     return {
         "node_trace": node_trace,
         "agent_trace": _trace_agent(state, "knowledge_agent", f"hits={len(hits)}"),
@@ -703,16 +1348,29 @@ async def _follow_up_agent(state: TriageGraphState) -> TriageGraphState:
         state.get("latest_answer"),
         state.get("conversation_messages", []),
     )
-    question_key = _choose_follow_up_field(state, combined_text)
-    raw_question = FOLLOW_UP_QUESTIONS[question_key]
-    known_facts_summary = _build_known_facts_summary(state.get("extracted_facts", {}))
+    question_key, raw_question = _choose_dynamic_follow_up_topic(state, combined_text)
+    known_facts_summary = _augment_known_facts_summary_with_candidates(
+        _build_known_facts_summary(state.get("extracted_facts", {})),
+        list(state.get("complaint_candidates", [])),
+    )
+    latest_answer = (state.get("latest_answer") or "").strip()
+    follow_up_intent = _classify_follow_up_intent(latest_answer)
+    current_follow_up_topic = state.get("current_follow_up_topic")
+    if _should_hold_current_topic(state) and current_follow_up_topic:
+        question_key = current_follow_up_topic
+        raw_question = COMPLAINT_ROUTE_QUESTIONS.get(current_follow_up_topic, FOLLOW_UP_QUESTIONS.get(current_follow_up_topic, raw_question))
+    if follow_up_intent == "ask_severity_scale":
+        question_key = "severity"
+        raw_question = FOLLOW_UP_QUESTIONS["severity"]
+    intent_prefix = _intent_aware_prefix(state=state, question_key=question_key)
     llm_question, llm_error = await _rewrite_follow_up_question_with_llm(
         llm_client=state.get("llm_client"),
         raw_question=raw_question,
         known_facts_summary=known_facts_summary,
         missing_field=question_key,
     )
-    question = llm_question or raw_question
+    question_core = llm_question or raw_question
+    question = f"{intent_prefix} {question_core}".strip() if intent_prefix else question_core
     llm_used = llm_question is not None
     llm_trace = _build_llm_trace(
         agent="follow_up_agent",
@@ -733,13 +1391,18 @@ async def _follow_up_agent(state: TriageGraphState) -> TriageGraphState:
     )
 
     messages = _append_message(state.get("conversation_messages", []), "assistant", question, kind="follow_up")
+    route_follow_up_history = list(state.get("route_follow_up_history", []))
+    if follow_up_intent != "express_uncertainty" and question_key not in FIELD_ORDER and question_key not in route_follow_up_history:
+        route_follow_up_history.append(question_key)
     return {
         "node_trace": node_trace,
         "agent_trace": _trace_agent(state, "follow_up_agent", f"question={question_key}"),
         "current_agent": "follow_up_agent",
         "follow_up_question": question,
-        "follow_up_rationale": f"Missing core field: {question_key}",
+        "follow_up_rationale": f"Next follow-up topic: {question_key}",
         "workflow_status": "awaiting_follow_up",
+        "route_follow_up_history": route_follow_up_history,
+        "current_follow_up_topic": question_key,
         "conversation_messages": messages,
         "response": response,
         "raw_follow_up_question": raw_question,
@@ -789,7 +1452,10 @@ async def _result_agent(state: TriageGraphState) -> TriageGraphState:
         department = _recommend_department(combined_text)
         care_path = _build_care_path(RiskLevel(state["risk_level"]))
         chief_complaint = _chief_complaint_text(state, combined_text).rstrip("。！？!?；;，, ")
+        knowledge_note = _build_knowledge_note(state)
         raw_summary = f"主诉：{chief_complaint}。当前补全信息后，建议优先咨询 {department.name}。"
+        if knowledge_note:
+            raw_summary = f"{raw_summary} {knowledge_note}"
         llm_summary, llm_error = await _rewrite_report_summary_with_llm(
             llm_client=state.get("llm_client"),
             raw_summary=raw_summary,
@@ -871,6 +1537,10 @@ def _persist_state(state: TriageGraphState) -> TriageGraphState:
     record.agent_trace = list(state.get("agent_trace", []))
     record.route_reason = state.get("route_reason")
     record.knowledge_summary = state.get("knowledge_summary")
+    record.route_follow_up_history = list(state.get("route_follow_up_history", []))
+    record.current_follow_up_topic = state.get("current_follow_up_topic")
+    record.complaint_candidates = list(state.get("complaint_candidates", []))
+    record.primary_focus_confirmed = state.get("primary_focus_confirmed", False)
     record.raw_follow_up_question = state.get("raw_follow_up_question")
     record.llm_follow_up_question = state.get("llm_follow_up_question")
     record.raw_report_summary = state.get("raw_report_summary")
@@ -882,6 +1552,7 @@ def _persist_state(state: TriageGraphState) -> TriageGraphState:
     if state["response"].status == TriageStatus.COMPLETED:
         record.status = TriageStatus.COMPLETED
         record.current_question = None
+        record.current_follow_up_topic = None
         record.final_result = state["response"].model_dump(mode="json")
     else:
         record.status = TriageStatus.NEEDS_FOLLOW_UP
@@ -896,6 +1567,8 @@ def _persist_state(state: TriageGraphState) -> TriageGraphState:
             "agent_trace": state.get("agent_trace", []),
             "route_reason": state.get("route_reason"),
             "knowledge_summary": state.get("knowledge_summary"),
+            "complaint_candidates": state.get("complaint_candidates", []),
+            "primary_focus_confirmed": state.get("primary_focus_confirmed", False),
             "raw_follow_up_question": state.get("raw_follow_up_question"),
             "llm_follow_up_question": state.get("llm_follow_up_question"),
             "raw_report_summary": state.get("raw_report_summary"),
@@ -918,6 +1591,7 @@ def _compiled_graph():
     workflow.add_node("supervisor_route", _supervisor_route)
     workflow.add_node("safety_agent", _safety_agent)
     workflow.add_node("triage_agent", _triage_agent)
+    workflow.add_node("chief_complaint_router_agent", _chief_complaint_router_agent)
     workflow.add_node("knowledge_agent", _knowledge_agent)
     workflow.add_node("follow_up_agent", _follow_up_agent)
     workflow.add_node("result_agent", _result_agent)
@@ -931,6 +1605,7 @@ def _compiled_graph():
         {
             "safety_agent": "safety_agent",
             "triage_agent": "triage_agent",
+            "chief_complaint_router_agent": "chief_complaint_router_agent",
             "knowledge_agent": "knowledge_agent",
             "follow_up_agent": "follow_up_agent",
             "result_agent": "result_agent",
@@ -939,6 +1614,7 @@ def _compiled_graph():
     )
     workflow.add_edge("safety_agent", "supervisor_route")
     workflow.add_edge("triage_agent", "supervisor_route")
+    workflow.add_edge("chief_complaint_router_agent", "supervisor_route")
     workflow.add_edge("knowledge_agent", "supervisor_route")
     workflow.add_edge("follow_up_agent", "persist_state")
     workflow.add_edge("result_agent", "persist_state")

@@ -35,6 +35,12 @@ class PatientProfile(BaseModel):
     allergies: list[str] = Field(default_factory=list)
     medications: list[str] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def validate_sex_specific_fields(self) -> "PatientProfile":
+        if self.sex == Sex.MALE and self.pregnancy_status and self.pregnancy_status.strip():
+            raise ValueError("男性不能填写孕产状态。")
+        return self
+
 
 class TriageRequest(BaseModel):
     session_id: str | None = None
@@ -119,6 +125,10 @@ class TriageSessionDetailResponse(BaseModel):
     agent_trace: list[dict[str, str]] = Field(default_factory=list)
     route_reason: str | None = None
     knowledge_summary: str | None = None
+    route_follow_up_history: list[str] = Field(default_factory=list)
+    current_follow_up_topic: str | None = None
+    complaint_candidates: list[str] = Field(default_factory=list)
+    primary_focus_confirmed: bool = False
     raw_follow_up_question: str | None = None
     llm_follow_up_question: str | None = None
     raw_report_summary: str | None = None

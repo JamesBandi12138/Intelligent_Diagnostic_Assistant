@@ -232,7 +232,7 @@ def test_follow_up_agent_falls_back_to_rule_question_when_llm_fails():
     session = get_session(session_id)
 
     assert response.status == "needs_follow_up"
-    assert "持续多久" in response.question
+    assert "发热" in response.question or "吞咽困难" in response.question or "呼吸受限" in response.question
     assert session is not None
     assert session.to_payload()["llm_used"] is False
     assert session.to_payload()["llm_error"] == "transport_error"

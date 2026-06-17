@@ -9,6 +9,7 @@ venv/
 # Node
 node_modules/
 dist/
+build-check/
 .vite/
 
 # Env
@@ -30,3 +31,6 @@ frontend-live.err.log
 # IDE
 .idea/
 .vscode/
+
+# Local journals
+开发日报/

@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
+    "dev": "vite --configLoader runner",
+    "build": "vue-tsc --noEmit && vite build --configLoader runner",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run --configLoader runner src/views/Triage.spec.ts"
   },
   "dependencies": {
     "@vitejs/plugin-vue": "^6.0.2",

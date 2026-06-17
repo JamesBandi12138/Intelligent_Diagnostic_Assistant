@@ -35,6 +35,10 @@ class SessionRecord:
     agent_trace: list[dict[str, str]] = field(default_factory=list)
     route_reason: str | None = None
     knowledge_summary: str | None = None
+    route_follow_up_history: list[str] = field(default_factory=list)
+    current_follow_up_topic: str | None = None
+    complaint_candidates: list[str] = field(default_factory=list)
+    primary_focus_confirmed: bool = False
     raw_follow_up_question: str | None = None
     llm_follow_up_question: str | None = None
     raw_report_summary: str | None = None
@@ -67,6 +71,10 @@ class SessionRecord:
             "agent_trace": self.agent_trace,
             "route_reason": self.route_reason,
             "knowledge_summary": self.knowledge_summary,
+            "route_follow_up_history": self.route_follow_up_history,
+            "current_follow_up_topic": self.current_follow_up_topic,
+            "complaint_candidates": self.complaint_candidates,
+            "primary_focus_confirmed": self.primary_focus_confirmed,
             "raw_follow_up_question": self.raw_follow_up_question,
             "llm_follow_up_question": self.llm_follow_up_question,
             "raw_report_summary": self.raw_report_summary,
@@ -104,6 +112,10 @@ class SessionRecord:
             agent_trace=payload.get("agent_trace", []),
             route_reason=payload.get("route_reason"),
             knowledge_summary=payload.get("knowledge_summary"),
+            route_follow_up_history=payload.get("route_follow_up_history", []),
+            current_follow_up_topic=payload.get("current_follow_up_topic"),
+            complaint_candidates=payload.get("complaint_candidates", []),
+            primary_focus_confirmed=payload.get("primary_focus_confirmed", False),
             raw_follow_up_question=payload.get("raw_follow_up_question"),
             llm_follow_up_question=payload.get("llm_follow_up_question"),
             raw_report_summary=payload.get("raw_report_summary"),
